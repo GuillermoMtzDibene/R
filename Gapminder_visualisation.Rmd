@@ -1,0 +1,124 @@
+---
+title: "Gapminder visualisation: population growth"
+date: 2021-12-04
+output: html_notebook
+---
+
+In this notebook I am going to show some graphs involving population totals and growth. Often people have a big misconception of how fast the world is growing or how unsustainable this growth is. While I will not touch on these topics, I will simply show that population does not seem to grow uncontrollably but rather is slowing down and will have an apex around 9 to 12 billion humans this century. These data were compiled by the _gapminder organisation._ The data set can be downloaded for free here: https://www.gapminder.org/data/
+
+(While not shown, the dataset needed to be reorganised; this is not shown since is just some basic functions from the tidyverse R package.)
+
+```{r importing-libraries, include=FALSE}
+library(tidyverse)
+library(modelr)
+library(gapminder)
+
+population <- read_csv(file = "population_total.csv")
+child_birth <- read_csv(file = "children_per_woman_total_fertility.csv")
+
+population <- population %>%
+	gather(
+		"1800":"2100",
+		key = "year",
+		value = "population",
+		na.rm = TRUE
+	)
+child_birth <- child_birth %>%
+	gather(
+		"1800":"2100",
+		key = "year",
+		value = "avg_rate",
+		na.rm = TRUE
+	)
+child_birth <- child_birth %>%
+	left_join(population)
+```
+
+
+Population
+-----------------------------------------------------------------
+I am going to focus on a few countries to prevent cramming the graphs. I am also going to consider the population as a whole and plot it across the years.
+
+```{r plot_of_growth}
+sel_country <- function(names, df) {
+	filter(df, country %in% names)
+}
+#I'm going to select two developed countries: Japan  and Canada since their populations are fairly aged and young, resp. I also will select several other countries in the developing world.
+countries = c("Canada", "Japan", "Chile", "Kenya", "Mexico", "Vietnam", "Ethiopia", "Congo")
+pop_countries <- sel_country(countries, population)
+pop_countries %>%
+	ggplot(aes(year, population, colour = country)) +
+	geom_ref_line(v = "2015", colour = "grey", size = 1) +
+	geom_point(size = 0.65) +
+	theme_classic() +
+	scale_y_continuous(name = "Population in millions", breaks = seq(0, 3e8, by = 15e6), labels = seq(0, 300, by = 15)) +
+	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20)) +
+	labs(title = "Population growth from 1800 until 2100", subtitle = "Expected growth from 2015 onwards") +
+	guides(
+		colour = guide_legend(override.aes = list(size = 3))
+	)
+```
+On countries there is clear evidence of the **Demographic transition model:**
+
+1. In the first stage there is low population growth (due to lack of health infrastructure, disease, low education, etc.)
+
+2. As quality of health care, vaccines, prevention programs increase or are introduced, the population growth explodes.
+
+3. As children stop dying, people start having less babies and give them a better quality of life, this introduces a slow down in the population growth. For example, this is quite clear in the graphs corresponding to Chile and to Vietnam.
+
+4. The final stage is considered to be when both population growth is slow and death rate is slow, thus reducing population at first to reach a stable point (the graph of Japan seems to indicate this).
+
+There is one exception to these stages in the previous graph: Canada. While we cannot test for this hypothesis, it seems likely that Canada's friendly immigrant policies will allow the population to continue growing (at a very slow rate) during the entire century. A fun, yet education video where the Demographic transition model is explained can be found here: https://www.youtube.com/watch?v=QsBT5EQt348
+
+
+```{r create_tot, include = FALSE}
+tot_pop <- population %>%
+	group_by(year) %>%
+	summarise(total = sum(population))
+tot_pop
+```
+Next, we graph the curve of the population total
+```{r}
+ggplot(tot_pop, aes(year, total)) +
+	geom_ref_line(v = "2015", colour = "grey", size = 1) +
+	geom_ref_line(h = 1.1e10, colour = "grey", size = 1) +
+	geom_point(size = 0.75) +
+	theme_classic() +
+	scale_y_continuous(name = "Total wordl population in billion", breaks = seq(0, 1.2e10, by = 1e9), labels = seq(0, 12, by = 1)) +
+	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20))
+```
+From the four stages presented above, it is clear that the world already is in stage three: slowing down its population growth. Not so long ago people were predicting continuous wars, starvation and massive death, yet as time continues it has become clearer and clearer that the world will never see 11 billion people at once. In fact, one big reason to invest money in developing nations would be to make the predictions even smaller and maybe never reach 10 or even 9 billion humans at once.
+
+
+Child births
+------------------------------------------------------------------------------
+I am going to plot only the child birth rate per women from 1950 onwards. While data exists before then, much of it is missing and is otherwise estimated or inconsistent. It is not until recently that governments started keeping track more carefully of population growth.
+
+```{r child-birth-graph}
+birth_countries <- child_birth %>%
+	filter(country %in% countries, year >= 1950)
+#The function bind_rows(df1, df2) essentially stacks df1 on TOP of df2 using the same columns-names and introducing NA for values not found in either tibble. Inside the function call I am defining the tibble df2 as the country "World" which considers the average birth rate worldwide. Notice that due to different population sizes we simply cannot consider the mean of the averages.
+birth_countries <- bind_rows(birth_countries,
+	birth_countries %>%
+		group_by(year) %>%
+		summarise(
+			country = "World",
+			avg_rate = sum(avg_rate * population) / sum(population),
+			population = sum(population)
+		)
+)
+birth_countries %>%
+	ggplot(aes(year, avg_rate)) +
+	geom_ref_line(h = 2, size = .75, colour = "grey") +
+	geom_point(aes(colour = country), size = 1) +
+	theme_classic() +
+	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20)) +
+	guides(
+		colour = guide_legend(
+			title = "Country",
+			override.aes = list(size = 4))
+	) +
+	scale_colour_brewer(palette = "Set1")
+```
+
+This graph is consistent with the previous graph of population growth in which most countries will find a stabilisation around 1.7-1.9 children per women and the world population will remain stable.
