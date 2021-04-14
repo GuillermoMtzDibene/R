@@ -54,11 +54,13 @@ pop_countries %>%
 	scale_y_continuous(name = "Population in millions", breaks = seq(0, 3e8, by = 15e6), labels = seq(0, 300, by = 15)) +
 	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20)) +
 	labs(title = "Population growth from 1800 until 2100", subtitle = "Expected growth from 2015 onwards") +
+	scale_colour_brewer(palette = "Set1") +
 	guides(
 		colour = guide_legend(override.aes = list(size = 3))
 	)
 ```
-On countries there is clear evidence of the **Demographic transition model:**
+
+On these countries there is clear evidence of the **Demographic transition model:**
 
 1. In the first stage there is low population growth (due to lack of health infrastructure, disease, low education, etc.)
 
