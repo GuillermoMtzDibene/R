@@ -1,7 +1,7 @@
 ---
 title: "Gapminder visualisation: population growth"
 date: 2021-12-04
-output: html_notebook
+output: html_document
 ---
 
 In this notebook I am going to show some graphs involving population totals and growth. Often people have a big misconception of how fast the world is growing or how unsustainable this growth is. While I will not touch on these topics, I will simply show that population does not seem to grow uncontrollably but rather is slowing down and will have an apex around 9 to 12 billion humans this century. These data were compiled by the _gapminder organisation._ The data set can be downloaded for free here: https://www.gapminder.org/data/
@@ -84,8 +84,9 @@ ggplot(tot_pop, aes(year, total)) +
 	geom_ref_line(h = 1.1e10, colour = "grey", size = 1) +
 	geom_point(size = 0.75) +
 	theme_classic() +
-	scale_y_continuous(name = "Total wordl population in billion", breaks = seq(0, 1.2e10, by = 1e9), labels = seq(0, 12, by = 1)) +
-	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20))
+	scale_y_continuous(name = "Total world population in billions", breaks = seq(0, 1.2e10, by = 1e9), labels = seq(0, 12, by = 1)) +
+	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20)) +
+	labs(tilte = "Total world population and expected growth")
 ```
 From the four stages presented above, it is clear that the world already is in stage three: slowing down its population growth. Not so long ago people were predicting continuous wars, starvation and massive death, yet as time continues it has become clearer and clearer that the world will never see 11 billion people at once. In fact, one big reason to invest money in developing nations would be to make the predictions even smaller and maybe never reach 10 or even 9 billion humans at once.
 
@@ -112,6 +113,7 @@ birth_countries %>%
 	geom_ref_line(h = 2, size = .75, colour = "grey") +
 	geom_point(aes(colour = country), size = 1) +
 	theme_classic() +
+	scale_y_continuous(name = "Average number of children born for every women") +
 	scale_x_discrete(name = "Year", breaks = seq(1800, 2100, by = 20)) +
 	guides(
 		colour = guide_legend(
