@@ -1,0 +1,403 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 4"
+output: html_document
+---
+
+# Exercise 10
+In this exercise we will study the Weekly data set, which is part of the ISLR library. This data contains 1,089 weekly returns fro 21 years, from the beginning of 1990 to the end of 2010. We are looking to find a good predictive model.
+
+```{r Import libraries, include=FALSE}
+library(ISLR)
+library(tidyverse)
+library(modelr)
+library(GGally)
+
+set.seed(12) #This is needed to guarantee we always get the same train and test split
+
+#Transform as tibble to be easier to handle in the tidyverse
+data <- as_tibble(Weekly)
+
+```
+The following matrix-plot produces scatter plots for each pair of variables, it adjusts a density estimation and calculates the correlations between pairs of variables. As expected, these correlation are near zero, the densities are centred at zero and they have low variance.
+
+```{r matrix plot, include=TRUE}
+ggpairs(Weekly, columns = c("Lag1", "Lag2", "Lag3", "Lag4", "Lag5", "Today"))
+```
+
+##A first model
+We are going to adjust a first model to this data set. This model is the _logistic_ model in which we are regressing `Direction` as a function of all other variables except `Today`.
+```{r creating logistic}
+logistic_full <- glm(Direction ~ . - Today - Year, data = data, family = binomial)
+summary(logistic_full)
+data <- add_predictions(data, logistic_full)
+data <- data %>%
+	mutate(pred_Class = ifelse(pred > 0.5, "Up", "Down"))
+cm_logistic <- data %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_")
+```
+The previous code chunk adjust a logistic regression model using the five previous days plus the volume of shared trades to predict the direction. The printed summary above shows that only one of the coefficients has some statistical significance. The negative value of the coefficients, except `Lag2` indicate that there is a negative association between that week's returns and today's. Beware that this is a logit association, not linear. We also saved the confusion matrix, which we now print
+```{r include = FALSE}
+cm_logistic
+```
+Given the confusion matrix, we can now calculate some important quantities:
+
+Quantity | Value
+:-------:|:------:
+Accuracy | $\dfrac{465 + 42}{1089} = 46.56\%$
+Sensitivity | $\dfrac{42}{19+42} = 68.85\%$
+False Positive Rate | $\dfrac{19}{19+465} = 3.9\%$
+
+Now, the _Accuracy_ of the model is simply the percentage of times the model _was_ correct overall. The _Sensitivity_ is the percentage of times the model correctly predicted an _increase in the market when the market actually increased_, while the _False Positive Rate_ is simply the percentage of times the model _mistakenly predicted going up while the market went down_. It is important to always provide the confusion matrix because these and several other rates can be computed from it.
+
+Notice that this model was evaluated using the data which we used to trained it. This already implies that the model will likely have a worse outcome if we were to test it.
+
+## Other models
+We are now going to study other possible models. In particular, we will consider KNN and Logistic with less parameters.
+
+### Logistic regression with less predictors
+We will use the past to predict the future. In other words, we will split the data using years before 2010 and 2010. In what follows, we train the models using the years 1990-2009 and we test using the year 2010.
+
+```{r}
+data <- as_tibble(Weekly)
+data_train <- data %>%
+	filter(
+		Year < 2010
+	)
+data_test <- data %>%
+	filter(
+		Year == 2010
+	)
+
+model_logis <- glm(Direction ~ Lag2, data = data_train, family = binomial)
+model_logis
+pred_logis <- data_test %>%
+	add_predictions(model_logis, type = "response")
+```
+We will consider now a logistic regression model in which `Direction`is modeled only using `Lag2`. The confusion matrix is
+```{r}
+pred_logis <- pred_logis %>%
+	mutate(
+		pred_Class = ifelse(pred > 0.5, "Up", "Down"),
+		pred_Class = as_factor(pred_Class)
+	)
+cm_logis <- pred_logis %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_", values_fill = 0)
+cm_logis
+```
+With this table, we can calculate
+
+Quantity | Value
+:-------:|:-----:
+Accuracy |$\dfrac{35}{52} = 67.30\%$
+Sensitivity| $100\%$ 
+False Positive Rate|$\dfrac{17}{17+3} = 85\%$
+
+Let us consider now a model with `Lag2` and `Lag5` as predictors.
+```{r}
+model_logis_25 <- glm(Direction ~ Lag2 + Lag5, data = data_train, family = binomial)
+summary(model_logis_25)
+```
+```{r}
+pred_logis_25 <- data_test %>%
+	add_predictions(model_logis_25, type = "response")
+pred_logis_25 <- pred_logis_25 %>%
+	mutate(
+		pred_Class = ifelse(pred > 0.5, "Up", "Down"),
+		pred_Class = as_factor(pred_Class)
+	)
+cm_logis_25 <- pred_logis_25 %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_", values_fill = 0)
+```
+We can see that there is not a lot of statistical significance in the coefficients. This simply means that we do not have evidence against the "null hypothesis" that there is no relation between `Lag2` and `Lag5`. The confusion matrix of this model is
+```{r include = FALSE}
+cm_logis_25
+```
+These are the same numbers as before.
+
+Let us now move away from logistic regression and let us consider a linear discriminant model. In theory, this should perform the similar to logistic regression, improving when the hypothesis of LDA are met by the data.
+
+#### Linear Discriminant Analysis
+
+```{r include = FALSE}
+library(MASS)
+```
+```{r}
+model_lda <- lda(Direction ~ Lag2, data_train)
+model_lda
+pred_lda <-predict(newdata = data_test, object = model_lda)
+model_lda <- data_test %>%
+	mutate(pred_Class = pred_lda$class)
+cm_lda <- model_lda %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_", values_fill = 0)
+cm_lda
+```
+This confusion table is again exactly the same as the previous two models, this is expected, LDA behaves similarly to logistic regression.
+
+### Quadratic Discriminant Analysis
+```{r}
+model_qda <- qda(Direction ~ Lag2, data_train)
+model_qda
+pred_qda <-predict(newdata = data_test, object = model_qda)
+model_qda <- data_test %>%
+	mutate(pred_Class = pred_qda$class)
+cm_qda <- model_qda %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_", values_fill = 0)
+```
+Having the model saved, we can now print its confusion matrix
+```{r}
+cm_qda
+```
+Interestingly, QDA only predicted positive direction for 2010, obtaining
+
+Quantity | Value
+:-------:|:-----:
+Accuracy |$\dfrac{32}{52} = 61.53\%$
+Sensitivity|$100\%$
+False Positive Rate | $0\%$
+
+Let us also consider a QDA model in which we use all previous days
+```{r}
+model_qda_full <- qda(Direction ~ . - Year - Volume - Today, data_train)
+model_qda_full
+pred_qda_full <-predict(newdata = data_test, object = model_qda_full)
+model_qda_full <- data_test %>%
+	mutate(pred_Class = pred_qda_full$class)
+cm_qda_full <- model_qda_full %>%
+	group_by(Direction, pred_Class) %>%
+	count() %>%
+	pivot_wider(names_from = Direction, values_from = n, names_prefix = "actual_", values_fill = 0)
+```
+The confusion matrix is
+```{r}
+cm_qda_full
+```
+Things are again different.
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{31}{52} = 59.61\%$
+Sensitivity | $\dfrac{24}{32} = 75\%$
+False Positive Rate | $\dfrac{13}{20} = 65\%$
+
+
+### K Nearest Neighbours
+We now move to try a KNN model for the data.
+```{r}
+library(class)
+train_X <- data_train %>%
+	dplyr::select(Lag2)
+test_X <- data_test %>%
+	dplyr::select(Lag2)
+```
+```{r}
+pred_knn_1 <- knn(train_X, test_X, data_train$Direction, k = 1)
+table(pred_knn_1, data_test$Direction)
+```
+This confusion matrix
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{25}{52} = 48\%$
+Sensitivity | $\dfrac{17}{32} = 53.13\%$
+False Positivity Rate | $\dfrac{12}{20} = 60\%$
+
+We repeat with different parameters for k,
+```{r}
+pred_knn_3 <- knn(train_X, test_X, data_train$Direction, k = 3)
+pred_knn_5 <- knn(train_X, test_X, data_train$Direction, k = 5)
+pred_knn_7 <- knn(train_X, test_X, data_train$Direction, k = 7)
+table(pred_knn_3, data_test$Direction)
+table(pred_knn_5, data_test$Direction)
+table(pred_knn_7, data_test$Direction)
+```
+None of these models beat a simple "always beat up" strategy.
+
+## Conclusion for Exercise 10
+From all the previous models considered, the best model (as measured by test error or higher test accuracy) was simple logistic regression where the only predictor is `Lag2` with an accuracy of $67.3\%$, which is higher than the naïve strategy of always betting up (that'd give an accuracy of $55\%$).
+
+# Exercise 11
+
+This exercise will try to model if miles per gallon can be predicted as high or low given other characteristics and information for the car. This uses the Auto data set from the ISLR library.
+
+```{r}
+auto_data <- as_tibble(Auto)
+auto_data <- auto_data %>%
+	mutate(
+		mpg01 = ifelse(mpg > median(mpg), 1, 0),
+		id = 1:nrow(auto_data)
+	)
+
+auto_train <- auto_data %>%
+	slice_sample(prop = .8)
+auto_test  <- anti_join(auto_data, auto_train, by = "id")
+
+ggpairs(auto_train,columns = c("displacement", "horsepower", "weight", "acceleration", "mpg01"))
+```
+
+The previous graph shows a very strong correlation between `displacement`, `horsepower`, `weight` and `acceleration`. It seems sensible to use only the pair that has less correlation. This pair is `weight` and `acceleration`.
+
+```{r}
+mpg_logis <- glm(mpg01 ~ weight + acceleration, data = auto_train, family = binomial)
+summary(mpg_logis)
+```
+It seems that all the coefficients are "statistically significant." It is important to notice that `weight` has very small coefficient. However, weight is in pounds (lb.) and so, the weight of every car is several thousands.
+```{r}
+pred_logis <- add_predictions(auto_test, mpg_logis, type = "response")
+pred_logis <- pred_logis %>%
+	mutate(
+		pred_Class = ifelse(pred > 0.5, 1, 0)
+	)
+cm_logis <- pred_logis %>%
+	group_by(mpg01, pred_Class) %>%
+	count() %>%
+	pivot_wider(
+		names_from = pred_Class,
+		values_from = n,
+		names_prefix = "predicted_",
+		values_fill = 0
+	)
+```
+The confusion matrix for this model is
+```{r}
+cm_logis
+```
+Three important quantities and their values from this model
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{66}{79} = 83.54\%$
+Sensitivity | $\frac{36}{39} = 92\%$
+False Positive Rate | $\dfrac{10}{40} = 25\%$
+
+Notice that the predicted variable is spit 50-50 among the two classes (by definition of the median). This model is much better than random guessing, which would yield an accuracy, sensitivity and false positive rate, in average, of 50%.
+
+## LDA for the Auto dataset
+```{r include = FALSE}
+library(MASS)
+```
+
+```{r}
+mpg_lda <- lda(mpg01 ~ weight + acceleration, data = auto_train)
+mpg_lda
+pred_mpg_lda <- predict(mpg_lda, auto_test)
+cm_mpg_lda <- auto_test %>%
+	mutate(
+		pred_Class = pred_mpg_lda$class
+	) %>%
+	group_by(mpg01, pred_Class) %>%
+	count() %>%
+	pivot_wider(
+		names_from = mpg01,
+		values_from = n,
+		names_prefix = "actual_",
+		values_fill = 0
+	)
+```
+The confusion matrix of this model is
+```{r include = FALSE}
+cm_mpg_lda
+```
+The confusion matrix yields the following information, it is readily seen to perform substantially worse than logistic regression.
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{60}{79} = 75.95\%$
+Sensitivity | $\frac{35}{50} = 70\%$
+False Positive Rate | $\dfrac{15}{40} = 37.5\%$
+
+## QDA for the auto dataset
+
+```{r}
+mpg_qda <- qda(mpg01 ~ weight + acceleration, data = auto_train)
+mpg_qda
+pred_mpg_qda <- predict(mpg_qda, auto_test)
+cm_mpg_qda <- auto_test %>%
+	mutate(
+		pred_Class = pred_mpg_qda$class
+	) %>%
+	group_by(mpg01, pred_Class) %>%
+	count() %>%
+	pivot_wider(
+		names_from = mpg01,
+		values_from = n,
+		names_prefix = "actual_",
+		values_fill = 0
+	)
+```
+The confusion matrix is now.
+
+```{r include = FALSE}
+cm_mpg_qda
+```
+The three values we have been obtaining are
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{64}{79} = 81.01\%$
+Sensitivity | $\frac{36}{48} = 75\%$
+False Positive Rate | $\dfrac{12}{40} = 30\%$
+
+## KNN with k = 1, 3, 4, 5, 7, 9
+```{r}
+library(class)
+std_scaler <- function(data, mean, sd) {
+	(data - mean) / sd
+}
+mu <- vector(mode = "double", length = 2)
+sd <- vector(mode = "double", length = 2)
+mu[1] = mean(auto_train$weight)
+mu[2] = mean(auto_train$acceleration)
+sd[1] = sd(auto_train$weight)
+sd[2] = sd(auto_train$acceleration)
+
+train_X_mpg <- tibble(
+	std_weight = std_scaler(auto_train$weight, mu[1], sd[1]),
+	std_acceleration = std_scaler(auto_train$acceleration, mu[2], sd[2])
+)
+
+test_X_mpg  <- tibble(
+	std_weight = std_scaler(auto_test$weight, mu[1], sd[1]),
+	std_acceleration = std_scaler(auto_test$acceleration, mu[2], sd[2])
+)
+
+train_y_mpg <- auto_train$mpg01
+
+mpg_knn1 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 1)
+mpg_knn3 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 3)
+mpg_knn4 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 4)
+mpg_knn5 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 5)
+mpg_knn7 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 7)
+mpg_knn9 <- knn(train_X_mpg, test_X_mpg, train_y_mpg, 9)
+```
+
+In the following tables, the **columns are predictions**  and the **rows are actual values**
+
+```{r echo=FALSE}
+table(mpg_knn1, auto_test$mpg01)
+table(mpg_knn3, auto_test$mpg01)
+table(mpg_knn4, auto_test$mpg01)
+table(mpg_knn5, auto_test$mpg01)
+table(mpg_knn7, auto_test$mpg01)
+table(mpg_knn9, auto_test$mpg01)
+```
+It becomes clear that increasing k from 1 to 3 increases the three quantities we have been studying but increasing it further seems to provide no further improvements. Also notice that this data has been standarised as to have mean zero and unit variance. The important values when we consider three neighbours ($k = 3$)
+
+Quantity | Value
+:-------:|:-----:
+Accuracy | $\dfrac{70}{79} = 88.6\%$
+Sensitivity | $\frac{37}{40} = 92.5\%$
+False Positive Rate | $\dfrac{6}{39} = 15.38\%$
+
+### Conclusion for exercise 11
+
+The best model we found was to use a standard scaler for the auto data, predicting high or low miles per gallon using weight and acceleration only. Our predictor is based on using KNN with k = 3.
