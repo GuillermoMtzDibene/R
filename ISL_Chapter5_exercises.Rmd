@@ -1,0 +1,227 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 5"
+output:
+  html_document:
+    df_print: paged
+---
+
+This chapter is all about validation, including cross-validation and bootstrap.
+
+## Cross-Validation
+The basic idea of cross validation is to shuffle the data set, pick a training set and a test set. Now choose a number $k$ in which the training set will be divided. Divide the training set into $k$ different groups $T_1, \ldots, T_k$ and for $i = 1, \ldots, k$ fit the model using all but the $T_i$ subset of the training set. Evaluate this fit using $T_i$ and call $\mathrm{MSE}_i$ the resulting mean squared error (or the misclassification error). The $k$-fold cross-validation testing error estimate is then
+$$
+	\mathrm{MSE}_{k-\mathrm{CV}} = \dfrac{1}{k} \sum_{i = 1}^k e_i,
+$$
+this is the estimate for the test error. We can then use the testing set and see how close the $k$-fold cross-validation error actually was to the test error.
+
+#### Caveat
+
+The main use of cross-validation is to more effectively estimate the error of a model than simple validation. This is specially useful when we are varying parameters, use cross-validation for each selection of parameters, and then select the parameter set that minimised the found cross-validations. More mathematically, we define $f(\theta)$ to be the error estimate found using cross-validation when the parameters that the model employed were $\theta = (\theta_1, \ldots, \theta_k)$. Then, we choose the best parameter as $\theta^* = \mathop{\arg\min}_\limits\theta f(\theta)$.
+
+
+## Bootstrap
+
+In this method, we assume we have a sample $X_1, \ldots, X_n$ of independent random variables following the same distibution $F.$ We then approximate the variance of $F$, denote $\sigma_F^2,$ using the "plug-in" statistic of $F$, in this case, the "empircal distribution function" which we denote by $F_n$ (this distribution depends on the given sample). We know the shape of $F_n$ explicitly (it assigns mass $\frac{1}{n}$ to each point in our sample). So, we can take a very large sample from $F_n,$ say a sample of size $B$, call it $X_1^*, \ldots, X_B^*$ (by definition, this is a sample from $X_1, \ldots, X_n$ _with replacement_) and then estimate
+$$
+	\sigma_{F_n}^2 \approx v_n^{(\mathrm{boot})} := \dfrac{1}{B} \sum_{i = 1}^B \left( X_i^* - \mu_n^{(\mathrm{boot})} \right)^2
+$$
+where $\mu_n^{(\mathrm{boot})} = \dfrac{1}{B} \sum\limits_{i = 1}^B X_i^*$. Finally, we are doing the following approximation
+$$
+	\sigma_F^2 \approx \sigma_{F_n}^2 \approx v_n^{(\mathrm{boot})}.
+$$
+(The first of these two approximation __cannot be measure__ but it is known it decreases as the sample size $n$ increases; the second approximation can be made arbitrarily close to zero by setting $B$ to be very large.)
+
+#### Caveat
+
+It is important to keep in mind that the first approximation $\sigma_F^2 \approx \sigma_{F_n}^2$ cannot be measured since we do not know what the "real" distribution function $F$ is. Yet, we know that $F_n \to F$ as $n \to \infty$ (by Glivenko-Cantelli theorem in the case of a single predictor, that is, when $p = 1$). (I could not find a reference on how fast the convergence is or the case of multiple predictors. In the exercises 5 and 6, $p = 2$.) On the other hand, logistic regression assumes the data to be independent $(X_1, Y_1), \ldots, (X_n, Y_n)$ with
+$$
+\begin{align*}
+Y_i|X_i = x_i &\sim \mathrm{Ber}(p(\theta, x_i)), \quad x_i = (x_{i,1}, \ldots, x_{i,p}),\\
+\mathrm{logit}\ p(\theta, x_i) &= \theta_0 + \sum_{j = 1}^p \theta_j x_{i, j}, \quad \theta = (\theta_0, \ldots, \theta_p)
+\end{align*}
+$$
+and if these assumptions fail or are far from reality, the bootstrap method will yield more accurate results.
+
+
+```{r include = FALSE}
+library(ISLR)
+library(MASS)
+library(tidyverse) #dplyr::select is masked by another library
+library(modelr)
+library(GGally)
+library(boot)
+set.seed(1)
+```
+
+
+# Exercise 5
+
+In this exercise we will analyse the `Default` data set. We will use `income` and `balance` to predict `default`.
+
+```{r}
+Default$id = 1:nrow(Default)
+#We take 75% of the data for training
+default_train <- Default %>%
+	slice_sample(prop = .75)
+default_test = dplyr::anti_join(Default, default_train, by = "id")
+```
+
+
+We do a first some visualisations of this data.
+```{r}
+default_train %>% ggplot(aes(default)) +
+	geom_bar(aes(fill = student)) +
+	labs(title = "Count of defaulted credit cards", x = "Default?", y = "Count", fill = "Student?")
+```
+
+We can see that overwhelmingly, people did not defaulted their credit cards. The percentage who defaulted is **`r round(mean(default_train$default == "Yes")*100)`%**.
+
+```{r}
+default_train %>% ggplot(aes(income, balance, colour = default)) +
+	geom_point() +
+	labs(title = "Scatter plot of income and credit card balance", colour = "Defaulted?", x = "Income (annual)", y = "Average credit card balance after monthly payment")
+```
+
+We now will fit a logistic regression using `balance` and `income`. As we saw in the previous scatter plot, there is little correlation between the two variables. The following code chunk simply creates the logistic model, then adds the predicted classes and constructs the confusion matrix of the given model.
+```{r}
+default_logis <- glm(default ~ income + balance, data = default_train, family = binomial)
+default_logis_pred <- default_test %>%
+	add_predictions(default_logis, type = "response") %>%
+	mutate(
+		pred_Class = ifelse(pred > 0.5, "Yes", "No"),
+		pred_Class = as_factor(pred_Class)
+	)
+cm_logis <- default_logis_pred %>%
+	group_by(default, pred_Class) %>%
+	count() %>%
+	pivot_wider(
+		names_from = default,
+		values_from = n,
+		names_prefix = "actual_",
+		values_fill = 0
+	)
+```
+
+The confusion matrix is
+```{r}
+cm_logis
+```
+
+We finally compute the validation classifier error (the fraction of predictions that were misclassified): $2.67\%$. This is not so good considering that a naïve approach to assume no costumer will default has an error of $3\%$. In other words, this model comits $89\%$ of the error of naïve approach.
+
+We now will do a 10-fold cross-validation to find the classifier error rate
+
+```{r}
+cv_logis <- cv.glm(default_train, default_logis, K = 10)
+cv_logis$delta[1]
+```
+
+This is better, this suggests that the model will have an actual error rate of $2.13\%$ when meeting new data. Obviously, we cannot know for sure unless we did have new data (we already know that when the trained model met new data in `default_test` it performed with $2.67\%$ indicating that 10-fold cross-validation underestimated the error.)
+
+### Adding a the Student indicator variable
+
+We now fit a second logitstic regression model in which we include the indicator variable as to whether or not the given person is a `student`.
+
+```{r}
+default_logis_student <- glm(formula = default ~ . - default, data = default_train, family = binomial)
+default_logis_student_pred <- default_test %>%
+	add_predictions(default_logis_student, type = "response") %>%
+	mutate(
+		pred_Class = ifelse(pred > 0.5, "Yes", "No"),
+		pred_Class = as_factor(pred_Class)
+	)
+cm_logis_student <- default_logis_student_pred %>%
+	group_by(default, pred_Class) %>%
+	count() %>%
+	pivot_wider(
+		names_from = default,
+		values_from = n,
+		names_prefix = "actual_",
+		values_fill = 0
+	)
+```
+
+The confusion matrix is
+```{r}
+cm_logis_student
+```
+Which has a higher test error than the model with less predictors. Let us check what the 10-fold cross-validation predicts as what the error would be
+
+```{r}
+cv_logis_student <- cv.glm(default_train, default_logis_student, K = 10)
+cv_logis_student$delta[1]
+```
+
+It predicts an error of $2.12\%$ while the actual test error was $2.84\%$.
+
+
+# Exercise 6
+
+This is a continuation of **Exercise 5**, we are interested in estimating the standard errors of the coefficients in the logistic regression of `default` using `income` and `balance`.
+
+The `summary()` function is now used to display the standard errors for the coefficients.
+```{r}
+summary(default_logis)
+```
+
+Now, we will use the bootstrap method to estimate the standard error.
+
+```{r}
+coeff_statistic <- function(data, index) {
+	return(coef(glm(default ~ income + balance, family = binomial, data = data, subset = index)))
+}
+
+boot(default_train, coeff_statistic, 1000)
+```
+
+It is clear that the point estimates are similar between the `summary()` output and the bootstrap method, as well as the standard errors, are very similar. This suggests that these are good reliable results.
+
+# Exercise 9
+
+In this exercise we will study the `Boston` housing data set and focus on its variable `medv` which is the median value of owner-occupied homes in thousands of dollars. First, we plot the histogram (this data set contains 506 observations), the blue line represents the median value, while the green one, the mean.
+
+```{r}
+mean_boston <- mean(Boston$medv)
+med_boston <- median(Boston$medv)
+Boston %>% ggplot(aes(medv)) +
+	geom_histogram(bins = 25) +
+	geom_ref_line(v = med_boston, size = 1, colour = "mediumblue") +
+	geom_ref_line(v = mean_boston, size = 1, colour = "green4") +
+	labs(x = "Median value of home in $1000s of USD", y = "Number of houses")
+```
+We are interested in finding a $95\%$ confidence interval for the sample median and sample mean, hereinafter denoted $\widehat{\mathrm{med}}$ and $\hat \mu$. The random variable $\hat \mu$ has variance $\mathbf{V}\mathrm{ar}(\hat \mu) = \dfrac{\sigma^2}{n}$, where $\sigma^2$ is the population variance of median house value; the variance of $\widehat{\mathrm{med}}$ has no closed form. First, for the mean,
+```{r}
+sd_mean_boston <- sd(Boston$medv) / sqrt(nrow(Boston))
+sd_mean_boston
+```
+For the median we need to use the bootstrap method.
+```{r}
+median_sd_statistic <- function(data, index) {
+	temp = data$medv[index]
+	return(median(temp))
+}
+boot(Boston, median_sd_statistic, 1000)
+```
+Since there are hundreds of observations, is quite safe to use normal approximation to compute the $95\%$ confidence intervals, which take the form $\hat x \pm 2 \cdot \widehat{sd}$, where $\hat{x}$ is the estimated value of the statistic of interest and $\widehat{sd}$ is the estimated standard deviation.
+
+Statistic | Estimated $95\%$ confidence interval
+:--------:|:--------------------------:
+$\hat \mu$| $[21.71,\ 23.36]$
+$\widehat{\mathrm{med}}$ | $[20.45,\ 21.95]$
+
+We also calculate the $95\%$ confidence interval for the first quartile $\hat{q}_{0.25}.$
+```{r}
+first_quartile_statistic <- function(data, index) {
+	temp = data$medv[index]
+	return(quantile(temp, probs = 0.25))
+}
+boot(Boston, first_quartile_statistic, 1000)
+```
+
+With this data, we can easily calculate the desired confidence interval
+
+Statistic | Estimated $95\%$ confidence interval
+:--------:|:--------------------------:
+$\hat{q}_{0.25}$ | $[15.92,\ 18.13]$
+
+Finally, we mention again that for both quartiles $q_{0.25}$ and $q_{.50} = \mathrm{med}$, there is no closed form for the standard error, so the bootstrap method really is quite handy.
