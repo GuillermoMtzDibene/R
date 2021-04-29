@@ -5,6 +5,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 library(ISLR)
+library(MASS)
 library(leaps)
 library(glmnet)
 library(pls)
@@ -276,7 +277,7 @@ validationplot(College_pcr,
 			   val.type = "MSEP",
 			   xlab = "Number of components",
 			   ylab = "Test MSE",
-			   main = "Principal Components Rregression performance")
+			   main = "Principal Components Regression performance")
 ```
 
 The previous plot suggests that there is a sharp decline after using two principal components, then another smaller decline when increasing to five components, and it then remains constants until fifteen components, and it reduces again using when using all components. Thus, if we want to reduce the dimension of the imput, we should select either two or five principal components.
@@ -450,3 +451,39 @@ errors %>%
 ```
 
 As suggested by the authors of Introduction to Statistical Learning, this is very similar to the MSE curve above. The main observation is that the fustanc
+
+
+
+
+
+# Exercise 11
+
+In this exercise we will use the `Boston` data set from the MASS library and try to predict per capita crime rate.
+
+```{r}
+k <- 10
+n_var <- 13 #Boston does not have categorical variables
+folds <- sample(1:k, nrow(Boston), replace = TRUE)
+cv_boston <- matrix(NA, k, n_var, dimnames = list(NULL, paste(1:n_var)))
+
+for (i in 1:k) {
+	boston_fit = regsubsets(crim ~ ., data = Boston[folds != i, ], nvmax = n_var)
+	for (j in 1:n_var) {
+		boston_pred = predict(boston_fit, Boston[folds == i, ], id = j)
+		cv_boston[i, j] = mean( (Boston$crim[folds == i] - boston_pred)^2 )
+	}
+}
+
+cv_boston_mean <- apply(cv_boston, 2, mean)
+which.min(cv_boston_mean) #It is a 9 variable model
+```
+
+Cross validation has selected a 12 variable model. The coefficients are
+
+```{r}
+coef(boston_fit, 12)
+```
+ 
+#### Comment
+ 
+The model selected is the best model obtained using cross-validation on the data set. Yet, the the estimated standard error is around 7 crimes per capita by town. This seems a bit of a large estimate. Not only this estimate is not so good, many of the predictions are negative (the crime rate can never be negative). However, the exercise was to select a model using a sensical validation approach (not just training error), this comment is just to mention that this model does not seem to be very good, even after having selected the best one. A sound alternative to what we just did is to transform $\mathbf{R}_+$ into all of $\mathbf{R}$ by using, say, the logarithm (or any other smooth bijection). In more lay terms, try to regress `log(crim)` with respect to all other variables in the `Boston` data set.
