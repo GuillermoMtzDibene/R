@@ -1,0 +1,452 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 6"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(ISLR)
+library(leaps)
+library(glmnet)
+library(pls)
+library(tidyverse)
+library(modelr)
+
+set.seed(12)
+```
+
+This notebook is about model selection and regularisation for linear regression.
+
+We assume we have a response variable $Y$ and a feature matrix $X$ of type $(n, p)$ (that is, $n$ observations -rows- and $p$ features -columns-). There are $2^p$ possible selection of features to use to predict $Y$. Which of these gives the best prediction?
+
+The most naïve algorithm is to use brute force, but this is infeasible as soon as $p$ is large since $2^p$ grows quite fast. So, there are a three alternatives presented in the book.
+
+**Algorihtsm 6.1 (Exhaustive method)**:
+
+1. For each subsize $0 \leq k \leq p$ find the model $M_k$ with $k$ features that has the least RSS (equivalently, the highest $R^2$).
+2. Of the $p+1$ models $M_0, \ldots, M_p,$ use a criterion to select the model.
+
+
+
+
+
+**Algorithm 6.2 (Forward selection)**:
+
+1. Start with the null model $M_0$ which predicts the mean of $Y$ and uses no features.
+2. Construct $M_k$ from $M_{k -1}$ by adding the feature which decreases RSS the most (equivalently, increases $R^2$ the most).
+3. Of the $p+1$ models $M_0, \ldots, M_p,$ use a criterion to select the model.
+
+
+
+
+
+**Algorithm 6.3 (Backward selection)**:
+
+1. Start with the full model $M_p$ using all features and ordinary least squares fit.
+2. Construct $M_{k - 1}$ from $M_k$ using all but one of the features in $M_k$ and such that it has the smallest RSS (equivalently, highest $R^2$).
+3. Of the $p+1$ models $M_0, \ldots, M_p,$ use a criterion to select the model.
+
+
+
+
+
+**Criterions for selection**:
+
+* Adjusted $R^2$
+* Mallow's Cp
+* Schwarz' Bayesian information (BIC)
+* Akaike's information (AIC)
+* k-fold cross-validation
+
+
+_Note._ You can use several of these and see if they agree in the number of optimal features.
+
+
+**After selection.** Retrain the model with the full data with the number of optimal features. _This does not guarantee that the features found during exploration will be the same after retraining with any of the three algorithms._
+
+# Exercise 8
+
+This is a simulated data set with one feature.
+
+```{r}
+n <- 100 #Number of observations
+b0 <- 1
+b1 <- -2
+b2 <- 0.5
+b3 <- 1.2
+X <- rnorm(n = n)
+eps <- rnorm(n)
+Y <- b0 + b1 * X + b2 * X^2 + b3 * X^3 + eps
+data <- tibble(x = X, y = Y)
+```
+
+We take a quick look at this simulated data
+```{r}
+data %>% ggplot(aes(x, y)) +
+	geom_point()
+```
+
+### Exhaustive method
+
+We are going to do best subset selection using powers of $X$ as the predictors (features) from $X$ until $X^{10}.$ We employ algorithm 6.1.
+
+```{r}
+regfit_models <- regsubsets(y ~ poly(x, degree = 10), data = data, nvmax = 10)
+regfit_models_summary <- summary(regfit_models)
+regfit_exh_crit <- tibble(
+	n_var = 1:10,
+	adjr2 = regfit_models_summary$adjr2,
+	cp = regfit_models_summary$cp,
+	bic = regfit_models_summary$bic
+) %>%
+	pivot_longer(cols = c("adjr2", "cp", "bic"), names_to = "criterion")
+regfit_exh_crit %>% ggplot(aes(n_var, value)) +
+	geom_line() +
+	geom_point(size = 2) +
+	facet_wrap(~ criterion, scales = "free_y") +
+	scale_x_discrete(name = "Number of variables", breaks = 1:10, limits = factor(1:10))
+```
+
+Not surprisingly, all two of the three criterions agree that a degree three polynomial is best, while Mallows's $C_p$ gives four predictors as best while three and five being quite close. It is important to notice that all criterions agree that two predictors is not enough. If we follow the philosophical principle that for any two equally good models, the prefereable one is the one with least features, we will be selecting a correct third degree polynomial.
+
+
+### Forward selection
+
+Similar to before, but we specify in the code to use forward selection
+
+```{r}
+regfit_fwd <- regsubsets(y ~ poly(x, degree = 10),
+						 data = data,
+						 nvmax = 10,
+						 method = "forward" #specify the method now
+						 )
+regfit_fwd_summary <- summary(regfit_fwd)
+regfit_fwd_crit <- tibble(
+	n_var = 1:10,
+	adjr2 = regfit_fwd_summary$adjr2,
+	cp = regfit_fwd_summary$cp,
+	bic = regfit_fwd_summary$bic
+) %>%
+	pivot_longer(cols = c("adjr2", "cp", "bic"), names_to = "criterion")
+regfit_fwd_crit %>% ggplot(aes(n_var, value)) +
+	geom_line() +
+	geom_point(size = 2) +
+	facet_wrap(~ criterion, scales = "free_y") +
+	scale_x_discrete(name = "Number of variables", breaks = 1:10, limits = factor(1:10))
+```
+
+This graphs are the same as before, so are the conclusions.
+
+### Backwards selection
+
+We repeat the previous code using backward selection now
+
+```{r}
+regfit_bwd <- regsubsets(y ~ poly(x, degree = 10),
+						 data = data,
+						 nvmax = 10,
+						 method = "backward" #specify the method now
+						 )
+regfit_bwd_summary <- summary(regfit_bwd)
+regfit_bwd_crit <- tibble(
+	n_var = 1:10,
+	adjr2 = regfit_bwd_summary$adjr2,
+	cp = regfit_bwd_summary$cp,
+	bic = regfit_bwd_summary$bic
+) %>%
+	pivot_longer(cols = c("adjr2", "cp", "bic"), names_to = "criterion")
+regfit_bwd_crit %>% ggplot(aes(n_var, value)) +
+	geom_line() +
+	geom_point(size = 2) +
+	facet_wrap(~ criterion, scales = "free_y") +
+	scale_x_discrete(name = "Number of variables", breaks = 1:10, limits = factor(1:10))
+```
+And again, the algorithm 6.3 produced the same results.
+
+### Lasso regression
+
+We will now fit a lasso regression, this is, we will solve
+$$
+\min_{(\beta_0,\beta) \in \mathbf{R}^{1 +p}} \dfrac{1}{n} \| y - \beta_0 \mathbf{1} - X \beta \|_2^2 + \lambda \| \beta \|_1
+$$
+and we will find an optimal $\lambda$ using cross-validation.
+
+```{r}
+X_train <- model.matrix(Y ~ poly(X, degree = 10))
+grid = 10 ^ seq(3, -5, length = 100)
+cv_lasso <- cv.glmnet(X_train, Y, alpha = 1, lambda = grid)
+plot(cv_lasso)
+```
+
+The previous plot shows that between 5 predictors are ideal. This is slightly different with the previous models, and also with reality since we _know_ that $Y$ is actually a polynomial of degree 3 of $X$.
+
+```{r}
+lasso_reg <- glmnet(X_train, Y, alpha = 1, lambda = grid)
+best_lambda <- cv_lasso$lambda.min
+lasso_coeff <- predict(lasso_reg, type = "coefficients", s = best_lambda)
+```
+
+If we print the coefficients, we will find that Lasso regression, with the best value of $\lambda$ obtained using cross-validation, gives the model
+$$
+\widehat Y = 1.49 + 5.31 X + 7.40 X^2 + 13.18 X^3 + 0.37 X^4 + 1.38 X^{10}
+$$
+In the first plot above (of $X$ vs $Y$), it is clear that the bulk of $x$-values are around zero, and their fourth power actually is very small while their tenth power is virtually zero.
+
+# Exercise 9
+
+This exercise will study the `College` data set and will try to adjust a model to predict the number of applications. Our baseline is an ordinary least squares regression method. We print the mean-squared error of this baseline fit.
+
+```{r}
+College <- as_tibble(College)
+College_train <- slice_sample(College, prop = 0.75)
+College_test  <- anti_join(College, College_train)
+College_full <- lm(Apps ~ ., data = College_train)
+College_full_pred <- College_test %>%
+	add_predictions(College_full)
+mes_full <- mean( (College_full_pred$pred - College_test$Apps)^2 )
+mes_full
+```
+
+### Ridge regression
+
+We now fit a ridge regression on the training set and will find an optimal $\lambda$ using cross-validation, and report the test error, and compare it with the test error of full model. The Ridge regression model is the following
+$$
+\min_{(\beta_0,\beta) \in \mathbf{R}^{1 +p}} \dfrac{1}{n} \| y - \beta_0 \mathbf{1} - X \beta \|_2^2 + \lambda \| \beta \|_2^2
+$$
+
+
+```{r}
+X_train <- model.matrix(Apps ~ ., College_train)
+X_test  <- model.matrix(Apps ~ ., College_test)
+y_train <- College_train$Apps
+grid = 10 ^ seq(4, -10, length = 200)
+College_cv_ridge <- cv.glmnet(X_train, y_train, alpha = 0, lambda = grid)
+lambda_ridge <- College_cv_ridge$lambda.min
+lambda_ridge
+```
+
+The value of $\lambda$ found using cross-validation is virtually zero, this suggests that Ridge regression will perform approximately equal to ordinary least squares. The following is a plot of the estimated MSE for different values of $\lambda$ using cross-validation.
+
+```{r}
+plot(College_cv_ridge)
+```
+
+
+
+```{r}
+College_ridge <- glmnet(X_train, y_train, alpha = 0, lambda = grid, thresh = 1e-12)
+College_pred_ridge <- predict(College_ridge, s = lambda_ridge, newx = X_test)
+mse_ridge <- mean( (College_pred_ridge - College_test$Apps)^2 )
+mse_ridge
+```
+As expected, the ridge regression produced the same mean-squared error than the full linear regression.
+
+### Lasso regression
+
+We repeat the the previous analysis but using lasso regression.
+
+```{r}
+College_cv_lasso <- cv.glmnet(X_train, y_train, alpha = 1, lambda = grid)
+lambda_lasso <- College_cv_lasso$lambda.min
+lambda_lasso
+```
+
+The same value of lambda than for Ridge regression. Again, the suspicion is that Lasso will perform similarly to full regression. Here is the plot of the estimated MSE.
+
+```{r}
+plot(College_cv_lasso)
+```
+
+And the test MSE for the Lasso regression.
+
+
+```{r}
+College_lasso <- glmnet(X_train, y_train, alpha = 1, lambda = grid, thresh = 1e-12)
+College_pred_lasso <- predict(College_lasso, s = lambda_lasso, newx = X_test)
+mse_lasso <- mean( (College_pred_lasso - College_test$Apps)^2 )
+mse_lasso
+```
+
+### Principal Components Regression
+
+We now apply principal components regression to this data set.
+
+```{r}
+College_pcr <- pcr(Apps ~ ., data = College_train, scale = TRUE, validation = "CV")
+validationplot(College_pcr,
+			   val.type = "MSEP",
+			   xlab = "Number of components",
+			   ylab = "Test MSE",
+			   main = "Principal Components Rregression performance")
+```
+
+The previous plot suggests that there is a sharp decline after using two principal components, then another smaller decline when increasing to five components, and it then remains constants until fifteen components, and it reduces again using when using all components. Thus, if we want to reduce the dimension of the imput, we should select either two or five principal components.
+
+```{r}
+College_pcr2_pred <- predict(College_pcr, College_test, ncomp = 2)
+College_pcr5_pred <- predict(College_pcr, College_test, ncomp = 5)
+mse_pcr2 <- mean( (College_pcr2_pred - College_test$Apps)^2 )
+mse_pcr5 <- mean( (College_pcr5_pred - College_test$Apps)^2 )
+```
+
+The mean-squared errors are around 3.8 million and 2.8 million using 2 and 5 components, respectively. Neither of which is particularly good.
+
+### Partial Least Squares
+
+Now analyse using PLS.
+
+```{r}
+College_pls <- plsr(Apps ~ ., data = College_train, scale = TRUE, validation = "CV")
+validationplot(College_pls,
+			   val.type = "MSEP",
+			   xlab = "Number of components",
+			   ylab = "Test MSE",
+			   main = "Partial Least Squares performance")
+```
+
+This plot suggests to use 6 components for the regression.
+```{r}
+College_pls6_pred <- predict(College_pls, College_test, ncomp = 6)
+mse_pls6 <- mean( (College_pls6_pred - College_test$Apps)^2 )
+mse_pls6
+```
+This is actually quite close to the full MSE (which is 1.58 million).
+
+
+#### Comments
+
+Overall, the models obtained here by ridge and lasso we not particularly useful since the best value of $\lambda$ (as found by cross-validation) was always the smallest value in the grid we pass to the function, this suggests that the best overall value is zero, meaning the both Ridge and Lasso regressions wil perform as well as ordinary least squares.
+
+There is one final measure to consider, and that is the $R^2$ for all the models in the exercise.
+
+```{r}
+#R^2 = 1 - RSS / TSS
+tss_aux <- mean( (College_test$Apps - mean(College_test$Apps))^2 )
+r2_ridge <- 1 - mse_ridge / tss_aux
+r2_lasso <- 1 - mse_lasso / tss_aux
+r2_pcr2 <- 1 - mse_pcr2 / tss_aux
+r2_pcr5 <- 1 - mse_pcr5 / tss_aux
+r2_pls6 <- 1 - mse_pls6 / tss_aux
+```
+
+Model | $R^2$
+:----:|:-----:
+Ridge | `r round(r2_ridge, 2)`
+Lasso | `r round(r2_lasso, 2)`
+PCR (2 components) | `r round(r2_pcr2, 2)`
+PCR (5 components) | `r round(r2_pcr5, 2)`
+PLS(6 components) | `r round(r2_pls6, 2)`
+
+This show that all models perform equally good, except Principal Component Regression
+
+
+
+# Exercise 10
+
+This is also a simulated data set. In this case we generate $X \sim \mathrm{Norm}(0, I_2)$ (where $I_2$ is the 2-dimensional identity matrix) and
+$$
+Y = X \beta + \varepsilon
+$$
+We are going to create $\beta$ randomly and set five of its coordinates equal to zero.
+
+
+```{r echo=TRUE, results = "hide"}
+n <- 1000
+p <- 20
+X <- matrix(NA, nrow = n, ncol = p)
+for (i in 1:n){
+	X[i, ] = rnorm(p)
+}
+beta <- matrix(rpois(20, 5), nrow = 20, ncol = 1)
+beta[2] <- 0
+beta[5] <- 0
+beta[9] <- 0
+beta[15] <- 0
+beta[19] <- 0
+eps <- rnorm(n)
+Y <- X %*% beta + eps
+
+data <- rename(as_tibble(cbind(X, Y)), resp = V21)
+
+data_train <- data %>%
+	slice_sample(prop = 0.9)
+data_test <- anti_join(data, data_train)
+
+best_fit <- regsubsets(resp ~ ., data = data_train, nvmax = 20)
+best_fit_summary <- summary(best_fit)
+best_fit_criterion <- tibble(
+	n_var = 1:20,
+	adjr2 = best_fit_summary$adjr2,
+	cp = best_fit_summary$cp,
+	bic = best_fit_summary$bic
+) %>%
+	pivot_longer(cols = c("adjr2", "cp", "bic"), names_to = "criterion")
+```
+
+Let us now graph $X$ vs $Y$
+```{r}
+best_fit_criterion %>%
+	ggplot(aes(n_var, value)) +
+	geom_line() +
+	geom_point(size = 2) +
+	facet_wrap(~ criterion, scale = "free_y")
+```
+
+
+These graphs all agree that fifteen predictors onward, the models should perform approximately equal.
+```{r}
+coef(best_fit, 15)
+```
+
+
+We are going to now calculate the test MSE.
+
+```{r}
+predict.regsubsets <- function(object, newdata, id, ...) {
+	form = as.formula(object$call[[2]])
+	mat = model.matrix(form, newdata)
+	coeffi = coef(object, id = id)
+	xvars = names(coeffi)
+	mat[, xvars] %*% coeffi
+}
+
+errors <- vector("double", 20)
+for (i in 1:20) {
+	pred = predict(best_fit, newdata = data_test, id = i)
+	errors[[i]] = mean( ( data_test$resp - pred )^2 )
+}
+errors <- tibble(
+	n_var = 1:20,
+	err = errors
+)
+
+errors %>% ggplot(aes(n_var, err)) +
+	geom_line() +
+	geom_point() +
+	labs(x = "Number of variables", y = "Test MSE")
+```
+
+Again, starting 12 or 13 variables, the test MSE does not decrease more. This again says that such a model is already good enough.
+
+Finally, the last plot of this exercise is to plot $r$, the number of variables, vs $\sqrt{\sum\limits_{j = 1}^p \left(\beta_j - \hat{\beta_j^r} \right)^2}$ which is the Euclidean distance between the true coefficients $\beta_j$ and the estimated coefficients $\hat{\beta_j^r}$ of the model with $r$ features.
+
+```{r}
+col_names <- colnames(data)[-21]
+errors <- vector("double", 20)
+for (i in 1:20) {
+	coeffi = coef(best_fit, i)[2:(i+1)]
+	mask = col_names %in% names(coeffi)
+	errors[[i]] = sqrt( sum( (beta[mask] - coeffi)^2 ) + sum( (beta[!mask])^2 ))
+}
+errors <- tibble(
+	n_var = 1:20,
+	err = errors
+)
+errors %>%
+	ggplot(aes(n_var, err)) +
+	geom_line() +
+	geom_point(size = 2) +
+	labs(x = "Number of variables", y = "Distance between estimated and true coefficients") +
+	scale_y_continuous(breaks = seq(4, 20, by = 4))
+```
+
+As suggested by the authors of Introduction to Statistical Learning, this is very similar to the MSE curve above. The main observation is that the fustanc
