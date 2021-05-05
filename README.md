@@ -8,3 +8,5 @@ I will upload some data visualisation or analyses I have done with R, as well as
 <a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter5_exercises.html">ISL, Chapter 5</a> In this notebook I worked through exercises 5, 6 and 9 of Introduction to Statistical Learning. Exercise 7 is practicing execution of loops, while exercise 8 is a simulated data set, both exercises seemed unnecessary to add. In exercise 9, we used the bootstrap method to find the standard error for the first two quartiles.
 
 <a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter6_exercises.html">ISL, Chapter 6</a> In this notebook I worked through exercises 8, 9, 10 and 11 of chapter 6. This chapter was all about model selection using different criterions or models, including Ridge, Lasso, Principal Components and Partial Least Square regressions.
+
+<a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter7_exercises.html">ISL, Chapter 7</a> In this notebook I worked through exercises 6, 7, 8 and 9 of chapter 6. This chapter was all about extending linear model to more flexible models and generalised additive models.

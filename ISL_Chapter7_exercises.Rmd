@@ -1,0 +1,580 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 7"
+output: html_document
+---
+
+This chapter is about fitting models that are no longer linear. It proposes several alternatives.
+
+### Polynomial regression
+
+This is still ordinary linear regression but given features $X_1, \ldots, X_p$ we consider a polynomial of degree $\leq d$ and the new features $X_{i_1, \ldots, i_p} = \prod\limits_{k = 1}^p X_k^{i_k}$ for all families $0 \leq i_k \leq d$ such that $i_1 + \ldots + i_p = d.$ Thus, we perform ordinary linear regression of the response variable $Y$ with the new family of features $(X_{i_1, \ldots, i_p})_{0 \leq i_1 + \ldots + i_p \leq d}$, in other words
+$$
+	Y = \sum_{0 \leq i_1 + \ldots + i_p \leq d} \beta_{i_1, \ldots, i_p} \ X_{i_1, \ldots, i_p} + \varepsilon
+$$
+and the $\beta_{i_1, \ldots, i_p}$ will be estimated using ordinary least squares. Typically, $d$ will not exceed 3 or 4 since polynomial functions tend to explode outside the region with the bulk of the features.
+
+It is also common to impose that every coefficient $\beta_{i_1, \ldots, i_p}$ should be zero for every multi-index $(i_1, \ldots, i_p)$ for which two of its subindices $i_s$ and $i_t$ are not zero, in lay terms: it is common to impose that there should be no interactions between the original features. When this is the case, there are polynomial functions
+$$
+	f_k(t) = \sum_{j = 1}^d \theta_{k, j}\ t^j, \quad k = 1, \ldots, p
+$$
+and the response is modelled as
+$$
+	Y = f_1(X_1) + \ldots + f_p(X_p) + \varepsilon,
+$$
+here the $\theta_{k, j}$ are estimated using ordinary least squares.
+
+### Generalized additive models.
+
+They assume the last for the response variable, except that the functions $f_k$ are not assumed of any particular form. Common choices include
+
+* Piecewise polynomials
+* Local regression
+* Splines
+
+# Exercise 6
+
+In this exercise we analyse the `Wage` data set.
+
+First, we fit a polynomial regression of the response `wage` using `age` as sole predictor. We will use a cross-validation approach to select the degree.
+
+```{r import-libraries, include=FALSE}
+library(ISLR)
+
+library(tidyverse)
+library(GGally)
+library(gam)
+library(MASS)
+
+set.seed(12)
+```
+
+```{r}
+#Load the data
+#Tibbles are easier to print and handle than dataframes
+wage_tb <- as_tibble(Wage) 
+
+#Select the number of folds and degree
+k <- 10
+d <- 10
+folds <- sample(1:k, nrow(wage_tb), replace = TRUE)
+cv_poly_errors <- matrix(NA, nrow = d, ncol = k, dimnames = list(paste(1:d), NULL))
+
+#Now proceed with the cross-validation
+#For each degree
+for (i in 1:d){
+	#For each subset, fit a polynomial regression of degree i
+	#using only the corresponding fold
+	for (j in 1:k) {
+		poly_fit <- lm(wage ~ poly(age, i, raw = TRUE), data = wage_tb[folds != j, ])
+		poly_pred <- predict(poly_fit, newdata = wage_tb[folds == j, ])
+		cv_poly_errors[i,j] <- mean( (wage_tb$wage[folds == j] - poly_pred)^2 )
+	}
+}
+#Now, cv_errors[i, j] is the MSE for the jth fold por a polynomial of degree i
+plot_poly <- qplot(1:d, apply(cv_poly_errors, 1, mean)) +
+	scale_y_continuous(limits = c(1575, 1750)) +
+	scale_x_continuous(breaks = 1:d) +
+	labs(
+		x = "Degree of the polynomial",
+		y = "Estimated MSE using 10-fold CV"
+	)
+
+plot_poly
+```
+
+The previous plot shows that degree 1 is not enough, and starting degree 2 onward, there is not much improvement. We can also use an ANOVA test. Notice that we are adjusting the polynomials to be _raw_, so that the coefficients affect the number of years as is (`R` automatically creates orthonormal polynomials which makes interpretation harder).
+
+```{r}
+#I will only test until degree 5
+poly_fit <- vector("list", 5)
+for (i in 1:5){
+	poly_fit[[i]] <- lm(wage ~ poly(age, i, raw = TRUE), data = wage_tb)
+}
+anova(poly_fit[[1]],
+	  poly_fit[[2]],
+	  poly_fit[[3]],
+	  poly_fit[[4]],
+	  poly_fit[[5]]
+)
+```
+The ANOVA test agrees that starting degree 3, the higher-degree models do not reject the null hypothesis that the two models fit the data equally well. This is consistent with the graph above of the cross-validated error.
+
+The summary for a quadratic polynomial is the following.
+
+```{r}
+summary(poly_fit[[2]])
+```
+
+And the summary for the cubic polynomial is
+```{r}
+summary(poly_fit[[3]])
+```
+
+And we see that the coefficient for quadratic is of magnitud $10^{-1}$ while the cubic is of magnitud $10^{-4}.$ This means that the quadratic term dominates given the natural range of ages. For example, at age $40$, we have $10^{-1} \times 40^2 = 160$ while $10^{-4} \times 40^3 = 6.4.$ Therefore, even when the coefficient is _statistically significant_, the values are not _actually significant_ since they are _two orders of magnitude smaller_ than the values of the quadratic term. Because of this reason, we are going to keep a quadratic polynomial of age.
+
+
+
+The next part of the exercise asks to fit a local regression using step-functions and select the optimal number of cuts using cross-validation.
+
+```{r}
+#We will try up to 20 cuts
+c <- 20
+cv_cut_errors <- matrix(NA, nrow = c-1, ncol = k, dimnames = list(paste(2:c), NULL))
+
+#For number of intervals 
+#cut(x, n) means "cut x into n intervals"
+for (i in 2:c) {
+	wage_tb$age_aux <- cut(wage_tb$age, i)
+	#We fit a linear regression using the specified number of cuts
+	#using only the corresponding fold
+	for (j in 1:k) {
+		cut_fit <- lm(wage ~ age_aux, data = wage_tb[folds != j, ])
+		cut_pred <- predict(cut_fit, newdata = wage_tb[folds == j, ])
+		cv_cut_errors[i-1, j] <- mean( (wage_tb$wage[folds == j] - cut_pred)^2 )
+	}
+}
+
+
+plot_cuts <- qplot(2:c, apply(cv_cut_errors, 1, mean)) +
+	scale_y_continuous(limits = c(1575, 1750)) +
+	labs(
+		x = "Number of cuts",
+		y = "Estimated MSE using 10-fold CV"
+	)
+
+plot_cuts
+```
+
+The previous plot suggests that 8 cuts is optimal. We can compare now both plots head to head. We need to code a function just for that puporse.
+
+```{r}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL, title = "") {
+	library(grid)
+	
+	# Make a list from the ... arguments and plotlist
+	plots <- c(list(...), plotlist)
+	
+	numPlots = length(plots)
+	
+	# If layout is NULL, then use 'cols' to determine layout
+	if (is.null(layout)) {
+		# Make the panel
+		# ncol: Number of columns of plots
+		# nrow: Number of rows needed, calculated from # of cols
+		layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+						 ncol = cols, nrow = ceiling(numPlots/cols))
+	}
+	
+	if (numPlots==1) {
+		print(plots[[1]])
+		
+	} else if (title == "") {
+		# Set up the page
+		grid.newpage()
+		pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+		
+		# Make each plot, in the correct location
+		for (i in 1:numPlots) {
+			# Get the i,j matrix positions of the regions that contain this subplot
+			matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+			
+			print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+											layout.pos.col = matchidx$col))
+		}
+	} else {
+		# Set up the page
+		grid.newpage()
+		#We add one row for the title
+		pushViewport(
+			viewport(
+				layout = grid.layout(
+					nrow(layout) + 1,
+					ncol(layout),
+					heights = c(1, rep_len(10, ncol(layout)))
+				)
+			)
+		)
+		grid.text(label = title, vp = viewport(layout.pos.row = 1, layout.pos.col = 1:ncol(layout)))
+		
+		# Make each plot, in the correct location
+		for (i in 1:numPlots) {
+			# Get the i,j matrix positions of the regions that contain this subplot
+			matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+			
+			print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row + 1,
+											layout.pos.col = matchidx$col))
+		}
+	}
+}
+
+multiplot(plot_poly, plot_cuts, cols = 2, title = "Cross-validated error")
+```
+
+The previous plot shows that a degree three polynomial already performs better than the regression with any number of intervals.
+
+
+
+
+
+# Exercise 7
+
+In this exercise we take the `Wage` data set and try to fit a good model to predict `wage`. This is an open problem, to find a good predictive and inferential model for wage given the other variables.
+
+First, we do a visualisation of the variables involved.
+
+```{r}
+wage_hist_plot <- wage_tb %>% ggplot(aes(wage)) +
+	geom_histogram(bins = sqrt(nrow(wage_tb))) +
+	labs(
+		title = "Histogram of Wage",
+		x = "Yearly wage in $1000s",
+		y = "Number of workers earning this wage"
+	)
+wage_age_plot <- wage_tb %>% ggplot(aes(age, wage)) +
+	geom_point(shape = 1, colour = "grey2") +
+	labs(
+		title = "Scatterplot Age vs Wage",
+		x = "Age of the employee",
+		y = "Yearly wage in $1000s"
+	)
+```
+
+```{r}
+multiplot(wage_hist_plot,
+		  
+		  wage_age_plot,
+		  cols = 2
+)
+```
+
+It seems that the distribution of `wage` is a mixture of two distributions, those that are normal earners and those who are very high earners (earning around $200,000 or more a year). I will restrict the analysis to those who are normal earners.
+
+```{r}
+wage_tb_normal <- wage_tb[wage_tb$wage <= 200, ]
+wage_tb_high <- wage_tb[wage_tb$wage > 200, ]
+```
+```{r}
+wage_ed_plot <- wage_tb_normal %>% ggplot(aes(education, wage)) +
+	geom_boxplot() +
+	scale_x_discrete(labels = c("<HS", "HS", "Some Coll", "Coll Deg", "Adv Deg")) +
+	labs(
+		title = "Boxplot Education vs Wage",
+		x = "Level of education",
+		y = "Yearly wage in $1000s"
+	)
+
+wage_mar_plot <- wage_tb_normal %>% ggplot(aes(maritl, wage)) +
+	geom_boxplot() +
+	scale_x_discrete(labels = c("NM", "M", "W", "D", "S")) +
+	labs(
+		title = "Boxplot Marital status vs Wage",
+		x = "Marital status",
+		y = "Yearly wage in $1000s"
+	)
+
+wage_race_plot <- wage_tb_normal %>% ggplot(aes(race, wage)) +
+	geom_boxplot() +
+	labs(
+		title = "Boxplot Race vs Wage",
+		x = "Race of the employee",
+		y = "Yearly wage in $1000s"
+	)
+
+wage_job_plot <- wage_tb_normal %>% ggplot(aes(jobclass, wage)) +
+	geom_boxplot() +
+	labs(
+		title = "Boxplot Type of job vs Wage",
+		x = "Type of job: industry or technology",
+		y = "Yearly wage in $1000s"
+	)
+```
+```{r out.width="90%"}
+multiplot(wage_mar_plot,
+		  wage_job_plot,
+		  wage_race_plot,
+		  wage_ed_plot,
+		  cols = 2
+)
+```
+
+These plots suggest that age, level of education and marital status influence how much you earn by quite a lot, while the type of industry is less influential. Race also plays a role. Let us see how correlated is race with education.
+
+```{r out.width = "90%"}
+wage_heat_plot <- wage_tb_normal %>%
+	count(education, race) %>%
+	ggplot(aes(race, education)) +
+	geom_tile(aes(fill = n)) +
+	scale_y_discrete(labels = c("<HS", "HS", "Some Coll", "Coll Deg", "Adv Deg")) +
+	labs(
+		title = "Heat map of Race and Education",
+		x = "Race of employee",
+		y = NULL,
+		fill = "Count"
+	)
+
+wage_raceED_plot <- wage_tb_normal %>% ggplot(aes(race)) +
+	geom_bar(aes(fill = education), position = "fill") +
+	labs(
+		title = "Proportions Education vs Race",
+		x = "Race of employee",
+		y = NULL,
+		fill = "Ed level"
+	) +
+	scale_fill_manual(
+		labels = c("<HS", "HS", "Some Coll", "Coll Deg", "Adv Deg"),
+		values = c("red", "lightblue", "darkgreen", "blue", "magenta")
+	)
+
+multiplot(wage_heat_plot, wage_raceED_plot, cols = 2)
+```
+
+Let us investigate a few alternatives. We use `age`, `education`, `race`, and `maritl` as predictive variables.
+
+From the previous exercise, we are going to use a quadratic polynomial for `age` variable. Also, the previous plots suggest that `education` does play a significant role. The variables `maritl` and `race` may be too broken down. From the plots, it seems that we can fit them as is or consider the alternatives of "Not Married vs Other" for  `maritl` and "Asian vs Not Asian" for `race` (we picked the most different variable for each case). There are four models we will cross-validate in the following code.
+
+
+```{r}
+#We initialise a matrix of appropriate size
+cv_models <- vector("list", 4)
+for (i in 1:4) {
+	cv_models[[i]] <- vector("double", k)
+}
+
+#For each fold
+for (i in 1:k) {
+	data_temp = wage_tb[folds != i, ]
+	#For each of selected training sample we fit four models
+
+	#All four variables as is
+	model_temp <- lm(wage ~ poly(age, 2, raw = TRUE) + education + race + maritl, data = data_temp)
+	pred <- predict(model_temp, newdata = wage_tb[folds == i, ])
+	cv_models[[1]][i] <- mean( (wage_tb$wage[folds == i] - pred)^2 )
+
+	#Now marital is binary: Never Married or Married at least once
+	model_temp <- lm(wage ~ poly(age, 2, raw = TRUE) + education + race + I(maritl == "1. Never Married"), data = data_temp)
+	pred <- predict(model_temp, newdata = wage_tb[folds == i, ])
+	cv_models[[2]][i] <- mean( (wage_tb$wage[folds == i] - pred)^2 )
+
+	#Now race is binary: Asian or Not Asian
+	model_temp <- lm(wage ~ poly(age, 2, raw = TRUE) + education + I(race == "3. Asian") + maritl, data = data_temp)
+	pred <- predict(model_temp, newdata = wage_tb[folds == i, ])
+	cv_models[[3]][i] <- mean( (wage_tb$wage[folds == i] - pred)^2 )
+
+	#Now both race and marital are binary
+	model_temp <- lm(wage ~ poly(age, 2, raw = TRUE) + education + I(race == "3. Asian") + I(maritl == "1. Never Married"), data = data_temp)
+	pred <- predict(model_temp, newdata = wage_tb[folds == i, ])
+	cv_models[[4]][i] <- mean( (wage_tb$wage[folds == i] - pred)^2 )
+}
+
+cv_final <- vector("double", 4)
+for (i in 1:4) {
+	cv_final[[i]] <- mean(cv_models[[i]])
+}
+names(cv_final) <- c("as_is", "bin_m", "bin_r", "bin_mr")
+cv_final
+```
+
+These four models are all very good, considerable better than simply using age since they have reduced the MSE to $1220 \pm 10$ from the $1600$ from the previous exercise. Somewhat surprisingly, they all perform almost identically well. We will continue to explore the simplest model where the variables `maritl` and `race` have been reduced to binary.
+
+```{r}
+model_chosen <- lm(wage ~ poly(age, 2, raw = TRUE) + education + I(race == "3. Asian") + I(maritl == "1. Never Married"), data = wage_tb)
+summary(model_chosen)
+```
+
+The previous table suggest that all coefficients are _statistically significant_ except the coefficient relative to race. Furthermore, considering the scales of the coefficients, these are almost all _actually significant_ in the sense that their impact on the final prediction is large given the scales under consideration. The only coefficient that does not seem to affect much the prediction is that of race (in fact, the coefficient suggest that, everything else being equal, being Asian decreases your yearly wage by around $\$2,702$). Additionally, $R^2$ is only $29.8\%$ suggesting that the model cannot capture much of the variability in the data. Let us check if ignoring race gives a much worse model.
+
+```{r}
+summary(lm(wage ~ poly(age, 2, raw = TRUE) + education + I(maritl == "1. Never Married"), data = wage_tb))
+```
+
+This model performs exactly the same as the previous one in regards to percentage of variance explained, plus all its coefficients are both _statisticall significant_ as well as _actually significant_ for the range of values.
+
+
+
+
+
+
+# Exercise 8
+
+We now will tackle the `Auto` data set. From previous chapters, we know that
+
+```{r}
+auto_tb <- as_tibble(Auto[,-9])
+names(auto_tb) <- c("mpg", "cyl", "displ", "hpwr", "wt", "acc", "year", "or")
+head(auto_tb)
+```
+```{r}
+ggpairs(auto_tb) +
+	theme(
+		axis.line = element_blank(),
+		axis.text = element_blank(),
+		axis.ticks = element_blank()
+)
+```
+
+Focus on the column of `mpg`: it seems that using one of the three `displ` (displacemente), `hpwr` (horsepower) or `wt` (weight) suffices to have the information of these three. Notice also the the correlation between any pair of these three variables is always bigger than $0.865$, which means again confirms the notion that only one of the three suffices. We can also add `year` and `or` (origin: US = 1, Europe = 2 or Japan = 3). We will investigate a model of the form `mpg ~ poly(wt, d) + year + or`. We will use cross-validation to select the optimal degree and span.
+
+```{r}
+#Since the Auto data set has only 392 observation, 10-fold cross-validation is not good, we'll use 4-fold
+k <- 4
+folds <- sample(1:k, size = nrow(auto_tb), replace = TRUE)
+
+#We will test a polynomial of up to degree 5 and the span
+d <- 10
+
+cv_errors <- matrix(NA, nrow = k, ncol = d, dimnames = list(paste(1:k), paste(1:d)))
+```
+```{r}
+#For each fold
+for (i in 1:k) {
+	#For each degree
+	for (j in 1:d) {
+		model_temp <- lm(mpg ~ poly(wt, degree = j, raw = TRUE) + year + or, data = auto_tb[folds != i, ])
+		pred <- predict(model_temp, newdata = auto_tb[folds == i, ])
+		cv_errors[i, j] = mean( (auto_tb$mpg[folds == i] - pred)^2 )
+	}
+}
+
+qplot(1:10, apply(cv_errors, 2, mean)) +
+	labs(
+		x = "Degree of the polynomial",
+		y = "4-fold CV estimation of MSE"
+	) +
+	scale_x_continuous(breaks = 1:10)
+```
+
+This is consistent with the graph above of scatterplots and correlations. The panel of `mpg` vs `wt` indeed seems to be a quadratic fit. This model seems to be quite good since the estimated standard error will be around 3mpg, and considering that most data points is around 20 to 30 mpgs, this is around 15% error.
+
+```{r}
+model_chosen_auto <- lm(mpg ~ poly(wt, 2) + year + or, data = auto_tb)
+summary(model_chosen_auto)
+```
+
+And we see that this simple model already explains 85% of the variability in the data. Not bad.
+
+
+
+
+
+# Exercise 9
+
+This exercises uses the `Boston` data set and we will use `dis` as a predictor for `nox` (`dis` is "weighted mean distances to five Boston employment centres" and `nox` is "nitrogen oxides concentration (parts per 10 million)").
+
+```{r}
+boston_tb <- as_tibble(Boston)
+```
+
+```{r}
+poly_3 <- lm(nox ~ poly(dis, 3, raw = TRUE), data = boston_tb)
+summary(poly_3)
+```
+
+```{r}
+pol_fun <- function(x, coeff) {
+	deg <- length(coeff) - 1
+	result <- coeff[[1]]
+	if (deg == 0) {
+		return(result)
+	}
+	for (i in 1:deg) {
+		result <- result + coeff[[i + 1]] * x^i
+	}
+	result
+}
+
+
+boston_tb %>% ggplot(aes(dis, nox)) +
+	geom_point() +
+	geom_line(aes(y = pol_fun(dis, poly_3$coefficients)), colour = "blue", size = 1) +
+	labs(
+		title = "Cubic polynomial prediction",
+		x = "Distance to the five employment centres",
+		y = "Nitrogen oxides concentration (parts per 10M)"
+	)
+```
+
+The next part of the exercise asks to fit a polynomial regression of degrees 1, ..., 10 and plot them. We will automate this with a function
+
+```{r warning = FALSE}
+plot_poly <- function(model, data) {
+	#We assume that dat[[1]] is the x-variable and data[[2]] is the y-variable for the plot
+	ggplot(data = data, aes(x = data[[1]], y = data[[2]])) +
+		geom_point() +
+		geom_line(
+			aes(y = pol_fun(data[[1]], model$coefficients)),
+			colour = "blue",
+			size = 1
+		) +
+		labs(
+			x = NULL,
+			y = NULL,
+			title = paste("Degree", length(model$coefficients)-1)
+		)
+}
+
+fits_poly <- vector("list", 10)
+graphs_poly <- vector("list", 10)
+for (i in 1:10) {
+	fits_poly[[i]] <- lm(nox ~ poly(dis, i, raw = TRUE), data = boston_tb)
+	graphs_poly[[i]] <- plot_poly(fits_poly[[i]], boston_tb[, c("dis", "nox")])
+}
+
+multiplot(plotlist = graphs_poly, cols = 5, title = "Polynomial fits of degrees 1 up to 10")
+```
+
+Graphically, it becomes clear that large degrees are really quite bad. Anything probably beyond degree 4 is just bad fit. Degree 1 and 2 seem to also not be quite good. Either three or four. The way to know would be using cross validation.
+
+```{r}
+#Boston is around 500 observations; we use 5-fold cross validation
+k <- 5
+folds <- sample(1:k, size = nrow(boston_tb), replace = TRUE)
+d <- 10
+cv_errors <- matrix(NA, nrow = k, ncol = d, dimnames = list(paste(1:k), paste(1:d)))
+
+for (i in 1:k) {
+	for (j in 1:d) {
+		temp <- lm(nox ~ poly(dis, degree = j), data = boston_tb[folds != i, ])
+		pred <- predict(temp, newdata = boston_tb[folds == i, ])
+		cv_errors[i, j] <- mean( (boston_tb$nox[folds == i] - pred)^2 )
+	}
+}
+
+qplot(1:d, apply(cv_errors, 2, mean)) +
+	scale_x_continuous(breaks = 1:d) +
+	labs(
+		x = "Degree of the polynomial fit",
+		y = "Estimated MSE",
+		title = "5-fold cross-validation"
+	)
+```
+
+This suggests that degrees 2, 3, 4 and 5 are all good. The actual minimum occured at
+```{r}
+which.min(apply(cv_errors, 2, mean))
+```
+
+The book suggest polynomial splines. However, when a relation between two vectors seems to be convex as is the case with `nox` and `dis`, then a logarithmic transformations tends to straighten up the relationship. This is because of the following:
+$$
+	\log y = a \log x + b \iff y = k x^d
+$$
+In other words, a linear relationship between the logarithm of the variables is the same as some power. We will try this instead.
+
+```{r}
+log_fit <- lm(log(nox) ~ log(dis), data = boston_tb)
+
+summary(log_fit)
+```
+
+Both coefficients are statistically significant and this model explains $75.91\%$ of the variation in the data while the cubic model above explains $71.31\%$. Even better, this heuristic needs not cross validation to find optimal coefficients. Let us see the fit in the original scales
+
+```{r}
+qplot(boston_tb$dis, boston_tb$nox) +
+	geom_line(aes(y = exp(pol_fun(log(boston_tb$dis), log_fit$coefficients))), size = 1, colour = "blue") +
+	labs(
+		title = "Linear fit on the logarithm of the variables",
+		x = "Distance to the five employment centres",
+		y = "Nitrogen oxides concentration (parts per 10M)"
+	)
+```
+
+Frankly, this heuristic is far better than the convolutedness of using cross-validation to select a degree or select knots in the polynomial spline fit.
