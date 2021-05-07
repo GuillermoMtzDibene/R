@@ -1,0 +1,449 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 8"
+output:
+  html_document:
+    df_print: paged
+---
+
+This chapter is all about trees: decision trees, bootstrapping aggregating (bagging), random forests and boosting.
+
+
+### Decision trees
+
+Basically, a decision tree with $J$ leafs is
+$$
+	\hat{Y}_i = \sum_{j = 1}^J c_j \mathbf{1}_{\{X_i \in \mathrm{R}_j\}}
+$$
+where each $c_j$ will correspond to:
+
+1. The _mean_ of the $X_i \in \mathrm{R}_j$ in the case of regression.
+2. The _mode_ of the $X_i \in \mathrm{R}_j$ in the case of classification.
+
+The trees are constructed by _recursive binary splitting_.
+
+### Bagging trees
+
+This is bootstrap for decision trees. Choose a very large $B.$ For $i = 1, \ldots, B,$ we take a sample with replacement from the original features and produce a decision tree $\hat{f}_i$. Then, we take a simple or weighted average in the case of regression or take a majority or a weighted vote in the case of classification to produce a bagged tree.
+
+
+### Random forests 
+
+This is similar to bagging in the sense that we build a number of single decision trees by sampling with replacement from the original features but this time, when building each tree, instead of using _recursive binary splitting_ using the feature that reduces the error or increases the purity the most, we select a random feature to do the splitting. This helps decorrelate the found trees and often provides improvements. Again, we combine all the decision trees by (weighted) averaging or voting on them.
+
+### Boosting
+
+This uses a very large number of trees, each of which contributes a small amount (known as the _learning rate_) and at each step uses decision trees with a single split (called _stumps_), and repeat on the residuals.
+
+1. Start with a zero model $\hat{f} = 0$ and full residuals $r_i = y_i.$
+2. For each iteration $b = 1, \ldots, B$:
+	+ Fit a stump $\hat{f}_b$ using the features $X$ and response $r.$
+	+ Update the model by $\hat{f} \leftarrow \hat{f} + \lambda \hat{f}_b.$
+	+ Update the residuals $r_i \leftarrow r_i - \lambda \hat{f}_b (x_i).$
+3. Return $\hat{f},$ which equals $\lambda \sum\limits_{b = 1}^B \hat{f}_b.$+
+
+
+
+
+```{r include = FALSE}
+library(ISLR)
+library(MASS)
+
+library(tidyverse)
+library(GGally)
+library(tree)
+library(randomForest)
+library(gbm)
+
+set.seed(12)
+```
+
+
+
+
+
+# Exercise 7
+
+In this exercise we continue an example from the book. We use the `Boston` data set and we will plot the error for a grid of values.
+
+
+```{r}
+boston <- as_tibble(Boston)
+#This data set has about 500 observations. To estimate the MSE we will do 5-CV
+k <- 5
+folds <- sample(1:k, size = nrow(boston), replace = TRUE)
+
+#We are going to do a grid with 
+num_trees <- c(200, 350, 500, 750, 1000)
+num_feat  <- c(2, 4, 5, 6, 8)
+
+#We create an array where we will do the estimations
+cv_boston <- array(NA,
+	dim = c(k, length(num_feat), length(num_trees)),
+	dimnames = list(1:k, num_feat, num_trees)
+)
+
+#For each fold
+for (p in 1:k) {
+	#For each number of features to select from
+	for (q in seq_along(num_feat)) {
+		#For each number of trees
+		for (t in seq_along(num_trees)) {
+			#Fit a model with the appropriate parameters using all the observations but the testing ones
+			temp_model <- randomForest(
+				medv ~ .,
+				data = boston[folds != p, ],
+				mtry = num_feat[[q]],
+				ntree = num_trees[[t]])
+			temp_pred <- predict(
+				temp_model,
+				newdata = boston[folds == p, ])
+			cv_boston[p, q, t] <- mean( (boston$medv[folds == p] - temp_pred)^2 )
+		}
+	}
+}
+cv_boston_means <- apply(cv_boston, c(2,3), mean)
+```
+
+The cross-validation with the number of trees selected meant that `R` had to fit 77,000 decision trees. The results are in the following matrix.
+
+```{r}
+cv_boston_means
+```
+We can see that letting the parameters `mtry` equal to 8 features to choose from per tree and fitting `ntree = 750` trees give the best results.
+
+```{r}
+cv_boston_means <- as_tibble(cv_boston_means) %>%
+	mutate(
+		m = num_feat,
+		m = as_factor(m),
+	) %>%
+	pivot_longer(cols = 1:length(num_trees), names_to = "num_trees", values_to = "est_MSE") %>%
+	mutate(
+		num_trees = as.numeric(num_trees)
+	)
+cv_boston_means %>% ggplot(aes(num_trees, est_MSE, colour = m)) +
+	geom_point(size = 2) +
+	geom_line(size = 1) +
+	labs(
+		title = "Cross-validation error for random Forest",
+		x = "Number of trees fitted",
+		y = "Estimated MSE",
+		colour = "Num feat"
+	) +
+	scale_x_continuous(breaks = num_trees)
+```
+
+The previous graph also tells that using $\left\lceil \sqrt{p} \right\rceil = 4$ was not enough and we needed 5-8 features. Also, the number of trees does not seem to be important since the entire range performed more or less the same. Thus, using 5 features with 200 trees seems to be best.
+```{r}
+boston_final_tree <- randomForest(medv ~ ., data = Boston, mtry = 5, ntrees = 200)
+boston_final_pred <- predict(boston_final_tree, newdata = Boston)
+boston_medv_mean <- mean(Boston$medv)
+boston_r2 <- 1 - mean( (Boston$medv - boston_final_pred)^2 ) / mean( (Boston$medv - boston_medv_mean)^2 )
+boston_r2
+```
+We finally calculated the $R^2$ for this model. It is really high at $97.89\%$, meaning that this model explain almost all the variation of the data.
+
+
+
+
+
+
+# Exercise 8
+
+We will now try to do a regression on the `Carseat` data set using trees. This data set contains the variable `Sales` which is what we will try to predict here. It is the number of units of sales in the thousands.
+
+```{r}
+set.seed(7)
+train = sample(1:nrow(Carseats), size = 0.8*nrow(Carseats))
+carseat_train <- as_tibble(Carseats[train, ])
+carseat_test  <- as_tibble(Carseats[-train,])
+```
+
+We are going to also optimise a random forest for this data set, this time, however, we have a test set.
+```{r}
+dim(carseat_train)
+```
+Since this is a rather small number of observations, we will do a simple 4-fold cross validation. The number of features in this data set is 10, so we can try 3-6 features for the random forest.
+```{r}
+k <- 4
+folds <- sample(1:k, size = nrow(carseat_train), replace = TRUE)
+
+num_trees <- c(100, 200, 350, 500, 750, 1000)
+num_feat  <- 3:6
+
+cv_carseats <- array(NA, dim = c(k, length(num_feat), length(num_trees)), dimnames = list(paste(1:k), num_feat, num_trees))
+
+for (i in 1:k) {
+	for (p in seq_along(num_feat)) {
+		for (t in seq_along(num_trees)) {
+			temp_model <- randomForest(
+				Sales ~ .,
+				data = carseat_train[folds != i, ],
+				mtry = p,
+				ntree = t
+			)
+			temp_pred <- predict(temp_model, newdata = carseat_train[folds == i, ])
+			cv_carseats[i, p, t] <- mean( (carseat_train$Sales[folds == i] - temp_pred)^2 )
+		}
+	}
+}
+
+cv_carseats_mean <- apply(cv_carseats, c(2,3), mean)
+```
+
+The cross-validates MSE are
+```{r}
+cv_carseats_mean
+```
+
+It clearly is the case that the CV selected the corner of our grid. We redo the CV taking this into account. Since the algorithm is slower the higher the number of trees, we can increase them only so much.
+
+```{r}
+num_trees <- c(750, 1000, 1500, 2000)
+num_feat  <- 6:8
+
+cv_carseats <- array(NA, dim = c(k, length(num_feat), length(num_trees)), dimnames = list(paste(1:k), num_feat, num_trees))
+
+for (i in 1:k) {
+	for (p in seq_along(num_feat)) {
+		for (t in seq_along(num_trees)) {
+			temp_model <- randomForest(
+				Sales ~ .,
+				data = carseat_train[folds != i, ],
+				mtry = p,
+				ntree = t
+			)
+			temp_pred <- predict(temp_model, newdata = carseat_train[folds == i, ])
+			cv_carseats[i, p, t] <- mean( (carseat_train$Sales[folds == i] - temp_pred)^2 )
+		}
+	}
+}
+
+cv_carseats_mean <- apply(cv_carseats, c(2,3), mean)
+cv_carseats_mean
+```
+
+Due to the randomness, the estimated MSE went much higher than the original grid. Due to this, we will take a more conservative approach and choose a pair of values where the MSE seem to be the most stable, which would be `mtry = 5` and `ntree = 750`.
+
+```{r}
+carseats_final_tree <- randomForest(Sales ~ ., data = carseat_train, mtry = 5, ntree = 750)
+carseats_final_pred <- predict(carseats_final_tree, newdata = carseat_test)
+carseats_test_mse <- mean( (carseats_final_pred - carseat_test$Sales)^2 )
+carseats_test_mse
+```
+This is a very good MSE, specially considering that this is a _test MSE_, not an estimated one. Finally we calculate the $R^2$ for this model.
+```{r}
+carseats_final_pred_train <- predict(carseats_final_tree, newdata = carseat_train)
+carseats_sales_mean <- mean(carseat_train$Sales)
+carseats_r2 <- 1 - mean( (carseat_train$Sales - carseats_final_pred_train)^2 ) / mean( (carseat_train$Sales - carseats_sales_mean)^2 )
+carseats_r2
+```
+This model explains $94\%$ of the variability in the data. Quite good.
+
+
+
+
+
+# Exercise 9
+
+In this exercise we will work with the `OJ` data set which contains 1070 purchases of two different brands of orange juice. We try to fit a model to be as accurate as possible. We now load the data and preprocess it a little.
+
+```{r include = FALSE}
+oj <- as_tibble(OJ) %>%
+	mutate(
+		Purchase = ifelse(Purchase == "CH", 0, 1), #CH = 0, MM = 1
+		Purchase = as_factor(Purchase)
+	)
+
+oj_train <- oj %>%
+	slice_sample(n = 800)
+oj_test <- anti_join(oj, oj_train)
+```
+
+It is quite obvious that several of this variables are highly correlated. This suggests that a random forest will outperform any other method due to its decorrelation mechanism.
+
+```{r}
+k <- 4
+folds <- sample(1:k, size = 800, replace = TRUE)
+
+num_feat <- c(3, 4, 6, 10, 15)
+num_trees <- c(100, 250, 500, 1000)
+
+cv_oj <- array(NA, dim = c(k, length(num_feat), length(num_trees)), dimnames = list(paste(1:k), num_feat, num_trees))
+
+for (i in 1:k) {
+	for (p in seq_along(num_feat)) {
+		for (t in seq_along(num_trees)) {
+			temp_model <- randomForest(
+				Purchase ~ .,
+				data = oj_train[folds != i, ],
+				mtry = p,
+				ntree = t
+			)
+			temp_pred <- predict(temp_model, newdata = oj_train[folds == i, ])
+			cv_oj[i, p, t] <- mean( oj_train$Purchase[folds == i] == temp_pred)
+		}
+	}
+}
+
+cv_oj_mean <- apply(cv_oj, c(2,3), mean)
+cv_oj_mean
+```
+The cross-validation approach selected 250 trees with 4 features.
+
+```{r}
+oj_final <- randomForest(Purchase ~ ., data = oj_train, mtry = 4, ntree = 250)
+oj_final_pred <- predict(oj_final, newdata = oj_test)
+oj_final_test_acc <- mean(oj_final_pred == oj_test$Purchase)
+oj_final_test_acc
+```
+This model produce $81.3\%$ accuracy. The confusion matrix is
+```{r}
+table(oj_final_pred, oj_test$Purchase)
+```
+
+Just for comparison, we also apply a logistic regression (which does not require any parameter refinement).
+```{r}
+oj_logis <- glm(Purchase ~ ., data = oj_train, family = binomial)
+oj_logis_pred <- predict(oj_logis, newdata = oj_test, type = "response")
+table(ifelse(oj_logis_pred > 0.5, 1, 0), oj_test$Purchase)
+```
+
+And this very simple model outperforms the random forest classifier, with an accuracy of $83.6\%$.
+
+
+
+
+
+# Exercise 10
+
+In this exercise we apply random forests to predict `Salary` from the `Hitters` data set.
+
+```{r include = FALSE}
+hitters <- as_tibble(Hitters) %>%
+	filter(!is.na(Salary))
+
+hitters <- hitters %>%
+	mutate(
+		LogSalary = log(Salary)
+	)
+
+hitters_train <- hitters %>%
+	slice_sample(n = 200)
+hitters_test <- anti_join(hitters, hitters_train)
+```
+
+The first part of the exercise asks to perform boosting using different learning rates.
+
+```{r}
+lear_rate <- c(0.0001, 0.0005, 0.001, 0.01, 0.05)
+n_ <- length(lear_rate)
+hitters_boost <- vector("list", n_)
+for (i in 1:n_) {
+	#Each entry in hitters_boost will contain a fitted model, a prediction and then the test MSE
+	hitters_boost[[i]] <- vector("list", 3)
+}
+
+for (i in 1:n_) {
+	hitters_boost[[i]][[1]] <- gbm(
+		LogSalary ~ . - Salary,
+		data = hitters_train,
+		n.trees = 5000,
+		distribution = "gaussian",
+		shrinkage = lear_rate[[i]],
+		verbose = FALSE)
+	hitters_boost[[i]][[2]] <- predict(hitters_boost[[i]][[1]], newdata = hitters_test)
+	hitters_boost[[i]][[3]] <- mean( (hitters_test$LogSalary - hitters_boost[[i]][[2]])^2 )
+}
+
+for (i in 1:n_) {
+	cat(
+		paste(
+			"Learning rate:",
+			lear_rate[[i]],
+			"Test MSE:",
+			round(hitters_boost[[i]][[3]], 3),
+			"\n"
+		)
+	)
+}
+```
+
+The smallest test MSE came with the learning rate $\lambda = 0.0005$. We cannot transform this MSE back to the `Salary` scale. We can consider the quotient  $\sqrt{\mathrm{MSE}} / \mu$ of the square-root of the estimated MSE divided by the mean (this is a unitless quantity - a percentage):
+```{r}
+sqrt(hitters_boost[[3]][[3]]) / mean(hitters_test$LogSalary)
+```
+It is around 9%. Now, in the book, the authors fit a linear model using best subset selection and obtained an MSE of 125,154 (2nd ed, p.250) for the `Salary` response. We do not have exactly the same test set as the authors, but we can use the entire data to have an approximation of the mean of the `Salary` response:
+```{r}
+sqrt(125154) / mean(hitters$Salary)
+```
+This is a whopping 66%. That means that, roughly, the boosting tree is much more accurate than the best linear regression model. And since we used only stumps, we have an additive model here as well.
+
+
+
+
+
+# Exercise 11
+
+In this exercise we will tackle the `Caravan` data set which contains $n = 5822$ observations and $p = 85$ features and a response variable `Purchase` which indicated if the given person bought a caravan (which is a trailer adapted for living).
+
+```{r include = FALSE}
+caravan <- as_tibble(Caravan) %>%
+	mutate(
+		Purchase = ifelse(Purchase == "Yes", 1, 0)
+	)
+caravan_train <- caravan %>%
+	slice_sample(n = 1000)
+caravan_test <- anti_join(caravan, caravan_train)
+```
+
+The first part of the exercise asks to fit a boosting model using 1,000 trees and a learning rate equal to 0.01.
+
+```{r}
+car_boost <- gbm(
+	Purchase ~ ., #Predict using all variables
+	data = caravan_train,
+	distribution = "bernoulli", #This is a binary classification problem
+	n.trees = 1000,
+	shrinkage = 0.01, #This is the learning rate
+	verbose = FALSE
+	)
+summary(car_boost)
+```
+
+The following link has the meaning of this [variables](http://www.liacs.nl/~putten/library/cc2000/data.html)
+
+
+```{r}
+car_pred <- predict(car_boost, newdata = caravan_test, type = "response")
+caravan_test <- caravan_test %>%
+	mutate(
+		pred = ifelse(car_pred > 0.2, 1, 0)
+	)
+caravan_test %>%
+	count(pred, Purchase) %>%
+	pivot_wider(names_from = pred, values_from = n)
+```
+
+We see that this data has a precision of $\frac{25}{134} = 18.66\%$, which is not as good as the precision of $26.7\%$ found using KNN with 5 neighbours (Chp. 4, p. 167). However, I suspect there must be a typo in the exercise since in Chapter 4 the authors used 1,000 observations for testing and in this exercise they asked 1,000 observations for training. Generally, the more observation, the better the predictions. I will redo the exercise but now using 1,000 observations for testing.
+
+
+```{r}
+car_boost2 <- gbm(
+	Purchase ~ . - pred,
+	data = caravan_test,
+	distribution = "bernoulli",
+	n.trees = 1000,
+	shrinkage = 0.01
+)
+car_pred2 <- predict(car_boost2, newdata = caravan_train, type = "response")
+caravan_train2 <- caravan_train %>%
+	mutate(
+		pred = ifelse(car_pred2 > 0.2, 1, 0)
+	)
+caravan_train2 %>%
+	count(pred, Purchase) %>%
+	pivot_wider(names_from = pred, values_from = n)
+```
+
+We now get a precision of $\frac{6}{39} = 15.38\%$, which is even worse than before.
