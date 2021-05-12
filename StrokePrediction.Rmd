@@ -1,0 +1,1026 @@
+---
+title: "Stroke Prediction"
+author: "Guillermo Martinez Dibene"
+date: "11th of May, 2021"
+output: html_document
+---
+
+# The Stroke Prediction Challenge
+
+In this presentation I am going to study a data set from the data analysis challenges website: Kaggle.
+
+This data set can be found here [Stroke](https://www.kaggle.com/fedesoriano/stroke-prediction-dataset)
+
+The idea is to predict if a given patient will have a stroke given a series of features of the patient.
+
+
+# Description of the features
+
+Feature				| Description
+--------			|------------
+`gender`			| A categorical variable with three levels: "Male", "Female" and "Other"
+`age`				| A continuous variable indicating the age of the patient
+`hypertention` 		| A dummy variable indicating if the patient has hypertension
+`heart_disease`		| A dummy variable indicating if the patient has heart disease
+`ever_married` 		| A dummy variable indicating if the patient has ever been married
+`work_type` 		| A categorical variable with 5 levels: "children", "Govt_job", "Never_worked", "Private" and "Self-employed"
+`residence_type` 	| A categorical variable with two levels: "Urban" and "Rural"
+`avg_glucose_level` | A continuous variable indicating the average glucose level in the blood
+`bmi`				| A continuous variable indicating the body mass index of the patient
+`smoking_status`	| A categorical variable with 4 levels: "formerly smoked", "never smoked", "smokes" and "Unknown" (which means unavailable)
+
+
+Respose				| Description
+--------			|------------
+`stroke`			| A dummy variable with indicating if the patient had a stroke or not
+
+
+### Literature review.
+
+The first thing to do, is to read what is already known about strokes. For example, I found the following information in the PHSA website (in this [link](http://www.phsa.ca/health-info/stroke)). The main risk factors for a stroke (both modifiable and non-modifiable) that appear in the features are: smoking, unhealthy weight (the feature `bmi` has weight in it), sex, medical history (both `hypertension` and `heart_disease` fall here).
+
+
+# The set up
+
+Now, I will load some libraries. I will mainly use base `R` together with the following libraries:
+
+Library | What for?
+--------|-----------
+`tidyverse` | Data cleaning, munging and preprocessing; this is a whole ecosystem of libraries
+`lvplot` | To plot violin plots with `ggplot2`
+`MASS` | Linear and Quadratic Discriminant Analyses
+`caret` | KNN
+`bestglm` | Feature selection of `glm` models
+`randomForest` | Random Forests
+`gbm` | Boosting models
+`e1071` | Many models but I use naïve Bayes from this library
+`ROCR` | ROC curves
+
+Before loading the data, I quickly opened it in my spreadsheet viewer and it looks quite fine. I should have no problem loading it.
+
+```{r Loading Libraries, include = FALSE}
+library(tidyverse)
+library(lvplot)
+library(MASS)
+library(caret)
+library(bestglm)
+library(randomForest)
+library(gbm)
+library(e1071)
+library(ROCR)
+```
+```{r Loadin data}
+data <- read_csv(
+	r"(stroke_data.csv)",
+	na = c("", "NA", "N/A")
+)
+```
+
+### Some quick info of the data:
+
+There are
+```{r}
+nrow(data)
+```
+observations
+
+From the categorical data `gender`, we have
+```{r}
+data %>% count(gender)
+```
+Unfortunately, there is only one observation for "Other" in `gender` which means we either have to process it or delete it from the data set.
+
+```{r}
+data %>% count(smoking_status)
+```
+This is quite bad since 30% of the observation is missing this important feature. We may need to consider every model with and without this variable.
+
+```{r}
+data %>% count(age)
+```
+It seems that before age 2, babies are counted in a fraction of a year, probably the use months (1/12 = 0.833...) and round them to 0.08, this causes the jump from 1.88 to 2.0. We are going to alter this into 0 and 1. 0 will be the babies who are not 1 year old and 1 will be those between 1 and 2 years old.
+
+
+We now check this data set for missing values.
+```{r}
+map(data, ~ sum(is.na(.)))
+```
+We see that only `bmi` has missing values. The variable `id` is not useful for us, so we will drop it.
+
+
+Let us finally see if the response variable is evenly distributed
+```{r}
+data %>% count(stroke)
+```
+This is a data set where the response variable is rare, so we are probably more interested in the precision and sensitivity of the model as opposed to its accuracy.
+
+
+
+
+# Some preprocessing
+
+With this information, we can see that there are a few things we need to do.
+
+1. I will drop the observation where `gender == "Other"`. Unfortunately, a single observation is not useful for data analysis.
+
+2. The `bmi` is missing a few data points. Later, I will randomly split the data into training and test set; I will fill the missing `bmi` values with the _mean of the training set_.
+
+3. Age needs some preprocessing too: those age less than two are given in fraction of a year and this is different from the rest of the data, we are going to make the spacing even by considering any observation between 0 and 1 to be 0 and between 1 and 2 to be 1.
+
+4. The features `gender`, `ever_married`, `work_type`, `Residence_type` and  `smoking_status` are considered characters. We have to transform them into unordered factors (this is the default of the `as_factor()` function).
+
+5. I will do some feature engineering and consider "children" as "Never_worked".
+
+```{r Preprocessing}
+data <- data %>%
+	dplyr::select(gender:stroke) %>%
+	filter(gender != "Other") %>%
+	mutate(
+		work_type = if_else(work_type == "children", "Never_worked", work_type), #If you take care of your children, we will consider you self-employed
+		age = if_else(0 < age & age < 1, 0, age),
+		age = if_else(1 <= age & age < 2, 1, age),
+		ever_married = if_else(ever_married == "Yes", 1, 0),
+		Residence_type = if_else(Residence_type == "Urban", 1, 0),
+		
+	) %>%
+	mutate(
+		gender = as_factor(gender),
+		work_type = as_factor(work_type),
+		smoking_status = as_factor(smoking_status),
+		stroke = as_factor(stroke)
+	)
+```
+
+And a last peak at the data.
+```{r}
+tail(data)
+```
+Now everything looks to be of the right type of data.
+
+### Train and test split
+```{r Train test split}
+set.seed(12)
+train <- sample(1:nrow(data), size = 4100) #4100/5109 is roughly 80% of the data
+data_train <- data[train, ]
+data_test  <- data[-train, ]
+```
+
+### Imputing missing values
+
+Although this is not the best strategy, we will impute all the missing values in `bmi` with the mean of the training data. There is roughly only 3% of missing values.
+
+```{r Imputing missing values}
+bmi_mean = round(mean(data_train$bmi, na.rm = TRUE), digits = 1)
+
+data_train <- data_train %>% replace_na(list(bmi = bmi_mean))
+data_test  <- data_test %>% replace_na(list(bmi = bmi_mean))
+```
+
+
+
+
+
+# Some visualisations
+
+I will use the library `ggplot2`. I will also code a `multiplot` function o display multiple plots together.
+
+```{r Multiplot Function}
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL, title = "") {
+	library(grid)
+	
+	# Make a list from the ... arguments and plotlist
+	plots <- c(list(...), plotlist)
+	
+	numPlots = length(plots)
+	
+	# If layout is NULL, then use 'cols' to determine layout
+	if (is.null(layout)) {
+		# Make the panel
+		# ncol: Number of columns of plots
+		# nrow: Number of rows needed, calculated from # of cols
+		layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+						 ncol = cols, nrow = ceiling(numPlots/cols))
+	}
+	
+	if (numPlots==1) {
+		print(plots[[1]])
+		
+	} else if (title == "") {
+		# Set up the page
+		grid.newpage()
+		pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+		
+		# Make each plot, in the correct location
+		for (i in 1:numPlots) {
+			# Get the i,j matrix positions of the regions that contain this subplot
+			matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+			
+			print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+											layout.pos.col = matchidx$col))
+		}
+	} else {
+		# Set up the page
+		grid.newpage()
+		#We add one row for the title
+		pushViewport(
+			viewport(
+				layout = grid.layout(
+					nrow(layout) + 1,
+					ncol(layout),
+					heights = c(1, rep_len(10, ncol(layout)))
+				)
+			)
+		)
+		grid.text(label = title, vp = viewport(layout.pos.row = 1, layout.pos.col = 1:ncol(layout)))
+		
+		# Make each plot, in the correct location
+		for (i in 1:numPlots) {
+			# Get the i,j matrix positions of the regions that contain this subplot
+			matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+			
+			print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row + 1,
+											layout.pos.col = matchidx$col))
+		}
+	}
+}
+```
+
+# Age, Gender, Heart disease, Hypertension and Strokes
+
+```{r Definition of plots}
+plot_gender <- data_train %>% ggplot(aes(gender, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Gender",
+		y = "Proportion",
+		fill = "Stroke?"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+	
+
+plot_age_gender <- data_train %>% ggplot(aes(age, fill = stroke)) +
+	geom_histogram(bins = 15) +
+	facet_wrap(~ gender) +
+	labs(
+		x = "Age",
+		y = "Number of individuals"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_hyper <- data_train %>% mutate(hypertension = as_factor(if_else(hypertension == 1, "Yes", "No"))) %>%
+	ggplot(aes(hypertension, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Hypertension",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_heart <- data_train %>% mutate(heart_disease = as_factor(if_else(heart_disease == 1, "Yes", "No"))) %>%
+	ggplot(aes(heart_disease, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Heart disease",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+```
+
+```{r Showing plots, out.width = '90%', fig.align = 'center'}
+multiplot(plot_gender, plot_hyper, plot_age_gender, plot_heart,
+	cols = 2,
+	title = "Some visualisations"
+)
+```
+
+__Note:__ somewhat surprisingly, `gender` does not affect stroke for this data set. That is,
+$$
+\mathbf{P}(\mathrm{Stroke} = \mathrm{Yes} | \mathrm{Gender} = \mathrm{Male}) = \mathbf{P}(\mathrm{Stroke} = \mathrm{Yes} | \mathrm{Gender} = \mathrm{Female})
+$$
+and same for $\mathrm{Stroke} = \mathrm{No}$.
+
+# BMI, Glucose and Strokes
+
+```{r BMI Glucose plots}
+plot_bmi_boxplot <- data_train %>% mutate(stroke = as_factor(if_else(stroke == 1, "Yes", "No"))) %>%
+	ggplot(aes(stroke, bmi)) +
+	geom_boxplot(outlier.alpha = 0.15) +
+	labs(
+		x = "Stroke",
+		y = "Body Mass Index"
+	)
+
+plot_bmi_histogram <- data_train %>% mutate(stroke = as_factor(if_else(stroke == 1, "Yes", "No"))) %>%
+	ggplot(aes(bmi, fill = stroke)) +
+	geom_histogram(bins = 40) +
+	labs(
+		x = "Body Mass Index",
+		y = "Count"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_glucose_violin <- data_train %>% mutate(stroke = as_factor(if_else(stroke == 1, "Yes", "No"))) %>%
+	ggplot(aes(stroke, avg_glucose_level)) +
+	geom_violin() +
+	geom_boxplot(width = 0.05, outlier.alpha = 0.05) +
+	labs(
+		x = "Stroke",
+		y = "Avg. glucose level"
+	)
+
+plot_glucose_histogram <- data_train %>% mutate(stroke = as_factor(if_else(stroke == 1, "Yes", "No"))) %>%
+	ggplot(aes(avg_glucose_level, fill = stroke)) +
+	geom_histogram(bins = 40) +
+	labs(
+		x = "Avg. glucose level",
+		y = "Count"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+```
+
+```{r Showing Plots 2, out.width = '90%', fig.align = 'center'}
+multiplot(
+	plot_bmi_boxplot, plot_bmi_histogram, plot_glucose_violin, plot_glucose_histogram,
+	cols = 2,
+	title = "Stroke and two continuous variables"
+)
+```
+
+We see that `bmi` does not seem to influence strokes, again, somewhat surprisingly.
+
+# Other categorical variables
+
+```{r Categorical plots}
+plot_smoking <- data_train %>% ggplot(aes(smoking_status, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Smoking status",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_x_discrete(
+		labels = c("Before", "Never", "Currently", "Unknown")
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_work <- data_train %>% ggplot(aes(work_type, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Working type",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_x_discrete(
+		labels = c("Priv.", "Self Emp.", "Gov.", "Never")
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_residence <- data_train %>% mutate(Residence = as_factor(if_else(Residence_type == 1, "Urban", "Rural"))) %>%
+	ggplot(aes(Residence, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Residence type",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+
+plot_married <- data_train %>% mutate(ever_married = as_factor(if_else(ever_married == 1, "Yes", "No"))) %>%
+	ggplot(aes(ever_married, fill = stroke)) +
+	geom_bar(position = "fill") +
+	labs(
+		x = "Have you ever been married?",
+		y = "Proportion"
+	) +
+	theme(
+		legend.position = "none"
+	) +
+	scale_fill_manual(
+		values = c("lightblue", "darkred")
+	)
+```
+
+```{r Showing Plots 3, out.width = '90%', fig.align = 'center'}
+multiplot(
+	plot_smoking, plot_married, plot_residence, plot_work,
+	cols = 2,
+	title = "Other variables and stroke"
+)
+```
+
+
+Interestingly, it would seem that "Never worked" prevents strokes. "People should stop working altogether!" On a serious note, we can check the ages of those who have never worked
+
+```{r}
+data_train %>% count(age, work_type) %>% filter(work_type == "Never_worked")
+```
+
+All of them, babies, kids and teenagers. This is bad since one variable is a full predictor of another (age and work-type).
+
+
+
+
+# Conclusions from the plots
+
+The previous plots suggest the following preliminary conclusions.
+
+
+Variable 				| Related to strokes?
+:-------:				|:------------------:
+Gender					|No
+Age						|Yes, seems strong
+Hypertension			|Yes, seems strong
+Heart Disease			|Yes, seems strong
+Body Mass Index			|No
+Avg. Glucose level		|Yes, seems weak
+Smoking					|Inconsistent plot
+Residence type			|No
+Work type				|No
+Ever Married			|Yes, seems strong
+
+__We will continue to work only with those features that seem related to stroke and smoking.__
+
+```{r Selection of variables}
+data_train <- data_train %>%
+	dplyr::select(age, hypertension, heart_disease, avg_glucose_level, smoking_status, ever_married, stroke)
+data_test <- data_test %>%
+	dplyr::select(age, hypertension, heart_disease, avg_glucose_level, smoking_status, ever_married, stroke)
+```
+
+
+# First models
+
+The most basic models to consider, that requires no parameter adjusting, are:
+
+* Naïve Bayes Classifier
+* Linear Discriminant Analysis
+* Quadratic Discriminant Analysis
+* Logistic Regression
+
+We are going to fit all these classifiers using the selected variables above. Furthermore, we use the function `bestglm` from the package of the same name to perform an exhaustive search for the best feature selection in logistic regression. One caveat, `bestglm` is a bit tricky to use. Instead of accepting a formula, it requires a  `data.frame` of the form Xy, where X is a design matrix and y is the response vector, but X should not have an intercept added for `bestglm` adds it itself.  However, since we have categorical variables, creating a model matrix from `R` base functions will always create a column representing the intercept or will always use one of the categorical variables and add all the levels.
+
+### Naïve Bayes Classifier
+
+We finally create a Naïve Bayes Classifier, which also requires no parameter adjusting.
+
+```{r Model Naive Bayes}
+model_naive <- naiveBayes(
+	stroke ~ .,
+	data = data_train
+)
+```
+
+
+### Linear discriminant analysis
+
+This model assumes that the distribution of the features, given the response, follows a Guassian distribution, whose matrix of covariances is not a function of the response. This results in a linear boundary between the responses.
+
+```{r Model LDA}
+model_lda <- lda(
+	stroke ~ .,
+	data = data_train
+)
+```
+
+
+### Quadratic discriminant analysis
+
+Similar to linear discriminant analysis except that now the different classes are allowed to have their own matrix of covariances. This results in a quadratic boundary.
+
+```{r Model QDA}
+model_qda <- qda(
+	stroke ~ .,
+	data = data_train
+)
+```
+
+
+# Logistic regression
+
+As mentioned earlier, we now do a full exhaustive search. Since there are 2 continuous features, 3 binary and 1 categorical with 4 levels, the following code will actually test all $2^8 = 256$ models for us.
+
+```{r Best GLM, message = FALSE}
+X_train <- model.matrix(
+	stroke ~ 0 + age + hypertension + heart_disease + avg_glucose_level + ever_married + smoking_status,
+	data = data_train
+)
+X_train <- X_train[, 1:(ncol(X_train)-1)] #We discard the column corresponding to Unknown smoking and this is absorbed by the intercept which is automatically added by bestglm
+
+#Use as.data.frame here since tibbles coerce each column as a list while a data frame will keep the vectors
+Xy_train <- as.data.frame(cbind(X_train, data_train[, "stroke"]))
+model_logis_BIC <- bestglm(
+	Xy_train, #Data has to be of the form [design_matrix, reponse_vector]
+	family = binomial, #Logistic regression
+	IC = "BIC" #We use Schwarz' bayesian information
+)
+
+model_logis_AIC <- bestglm(
+	Xy_train, #Data has to be of the form [design_matrix, reponse_vector]
+	family = binomial, #Logistic regression
+	IC = "AIC" #We use Akaike's information
+)
+```
+
+We know for sure that the best model, according to Schwarz' bayesian information is:
+```{r message = FALSE}
+model_logis_BIC$BestModel
+
+model_logis_BIC_best <- glm(stroke ~ age + avg_glucose_level, data = data_train, family = binomial)
+```
+
+And for Akaike's information:
+```{r message = FALSE}
+model_logis_AIC$BestModel
+
+model_logis_AIC_best <- glm(stroke ~ age + hypertension + avg_glucose_level + smoking_status, data = data_train, family = binomial)
+```
+
+Both models seem to be really quite good and they both differ very little in their residual deviance and their Akaike's information are almost the same. We will keep both to test later on. Something that seems really good about AIC over BIC is that AIC seemed to choose the "right" (most intuitive) variables such as `smoking_status = "smokes"` as opposed to "Unknown".
+
+We will also compare with a full model
+```{r Full Logistic}
+model_logis_full <- glm(
+	stroke ~ .,
+	data = data_train,
+	family = binomial
+)
+summary(model_logis_full)
+```
+
+We see how the deviance is just a bit smaller than a much smaller model, suggesting that indeed the full model has too many predictors.
+
+# Other classification models
+
+Having done logistic regression as our basic classification, we proceed with other models.
+
+### Additive model
+
+We are going to construct an additive model using boosting consisting solely of stump. We are going to select a very small learning rate (0.001) and select the optimal number of trees using cross-validation.
+
+```{r Boosting CV, echo = TRUE, message = FALSE}
+set.seed(19)
+k <- 10 #Number of folds
+folds <- sample(
+	1:k,
+	size = nrow(data_train),
+	replace = TRUE
+) #data_train[folds == i, ] is the testing set for the ith fold
+
+num_trees <- c(100, 250, 500, 1000, 2000) #Different number of trees
+
+cv_boost <- matrix(
+	data = NA, #No data
+	nrow = k,
+	ncol = length(num_trees),
+	dimnames = list(paste(1:k), num_trees)
+) #An empty matrix to put the error cv_boost[i, m] is the ith fold error for the mth number of trees
+
+data_train_aux <- data_train %>%
+	mutate(
+		stroke = as.double(stroke)-1
+	) #gbm function does not accept factors as response
+
+#Ditto for the test set
+data_test_aux <- data_test %>%
+	mutate(
+		stroke = as.double(stroke)-1
+	)
+
+
+#Now the cross-validation
+for (i in 1:k) {
+	for (m in seq_along(num_trees)) {
+		temp_model <- gbm(
+			stroke ~ ., #We use all variables
+			distribution = "bernoulli", #Binary classification
+			data = data_train_aux[folds != i, ], #Train on everything but the testing set
+			n.trees = num_trees[[m]],
+			shrinkage = 0.001
+		)
+		temp_prob <- predict(
+			temp_model,
+			newdata = data_train_aux[folds == i, ],
+			type = "response"
+		) #This predicts the probability of having stroke
+		temp_pred <- if_else(temp_prob > 0.5, 1, 0) #We use 0.5 cutoff
+		cv_boost[i, m] <- mean( temp_pred == data_train_aux$stroke[folds == i] ) #We use the accuracy in the CV
+	}
+}
+
+cv_boost_means <- apply(cv_boost, 2, mean)
+cv_boost_means
+```
+
+We see that the estimated accuracy was the same regardless the number of trees. We are going to keep the middle value.
+
+```{r Boost Error Graphs, eval=FALSE, include=FALSE}
+cv_boost_means <- as_tibble(cv_boost_means) %>%
+	mutate(
+		n_trees = num_trees
+	)
+
+cv_boost_means %>% ggplot(aes(n_trees, value)) +
+	geom_point(size = 1.25) +
+	geom_line() +
+	labs(
+		title = "Cross-validation of accuracy",
+		colours = "Lear. rate",
+		x = "Number of trees",
+		y = "Estimated accuracy"
+	)
+```
+
+
+```{r Model boost, fig.align = 'center'}
+model_boost <- gbm(
+	stroke ~ .,
+	distribution = "bernoulli",
+	data = data_train_aux,
+	shrinkage = 0.001,
+	n.trees = 500
+)
+
+summary(model_boost, cBars = 2)
+```
+
+In this model (which is linear), all the influence lies on the feature `age`. This seems to be bad and a poor choice. Later, we will test all models using the testing set.
+
+# K-Nearest Neighbours
+
+This algorithm __only works with numeric variables__ and is __sensitive to scale__.
+
+```{r CV KNN}
+model_knn <- train(
+	method = "knn",
+	stroke ~ .,
+	data = data_train,
+	preProcess = c("center", "scale"),
+	trControl = trainControl(
+		method = "cv",
+		number = 10,
+	),
+	tuneGrid = data.frame(
+		.k = 1:9
+	),
+	metric = "Kappa"
+)
+
+model_knn
+```
+
+```{r , out.width = '90%', fig.align = 'center'}
+plot(model_knn)
+```
+
+We see that $\kappa$ was maximised when there was a single neighbour (this makes sense since the vast majority did not have a stroke).
+
+```{r Training of KNN}
+std_scaler <- function(x) {
+	( (x - mean(x, na.rm = TRUE)) / sd(x, na.rm = TRUE) )
+}
+
+data_train_knn <- dummyVars(
+	~ ., #Expand everything
+	data = data_train %>% dplyr::select(-stroke), #Do not use the response
+	sep = "_"
+)
+data_train_knn <- predict(
+	data_train_knn,
+	newdata = data_train %>% dplyr::select(-stroke)
+) #This actually creates the data frame
+data_train_knn <- apply(data_train_knn, 2, std_scaler)
+
+
+###Ditto for the test data
+data_test_knn <- dummyVars(
+	~ ., #Expand everything
+	data = data_test %>% dplyr::select(-stroke), #Do not use the response
+	sep = "_"
+)
+data_test_knn <- predict(
+	data_test_knn,
+	newdata = data_test %>% dplyr::select(-stroke)
+)
+data_test_knn <- apply(data_test_knn, 2, std_scaler)
+
+model_knn <- knn3(
+	x = data_train_knn,
+	y = data_train$stroke,
+	prob = TRUE,
+	k = 1
+)
+```
+
+
+
+
+
+# Random forest
+
+We now will try to fit a random forest. There are two parameters that we need to select. The number of trees in the forest and the number of features each tree is allowed to select.
+
+```{r Random Forest CV}
+#We use the same k and folds from before
+num_trees <- c(750, 1000, 1500, 2000)
+num_featu <- c(5,6)
+
+cv_ranForst <- array(NA, dim = c(k, length(num_trees), length(num_featu)), dimnames = list(paste(1:k), num_trees, num_featu))
+
+for (i in 1:k) {
+	for (m in seq_along(num_trees)) {
+		for (f in seq_along(num_featu)) {
+			temp_model <- randomForest(
+				stroke ~ .,
+				data = data_train[folds != i, ],
+				ntree = num_trees[[m]],
+				mtry = num_featu[[f]]
+			)
+			temp_pred <- predict(temp_model, newdata = data_train[folds == i, ])
+			temp_pos_class <- sum(data_train$stroke[folds == i] == 1) #Count how many had stroke in this fold
+			cv_ranForst[i, m, f] <- sum( (temp_pred == 1) & (data_train$stroke[folds == i] == 1) ) / temp_pos_class
+		}
+	}
+}
+
+cv_ranForst_means <- apply(cv_ranForst, c(2,3), mean)
+```
+
+We now plot the estimated accuracy
+
+```{r Random Forest Error Graphs, out.width = '90%', fig.align = 'center'}
+cv_ranForst_means <- as_tibble(cv_ranForst_means) %>%
+	mutate(
+		n_trees = num_trees
+	) %>%
+	pivot_longer(
+		cols = as.character(num_featu),
+		names_to = "num_feat",
+		values_to = "est_acc"
+	)
+
+cv_ranForst_means %>% ggplot(aes(n_trees, est_acc, colour = num_feat)) +
+	geom_point(size = 1.25) +
+	geom_line() +
+	labs(
+		title = "10-fold CV estimated sensitivity for Random Forest",
+		x = "Number of trees in the forest",
+		y = "Estimated sensitivity",
+		colour = "N. features"
+	) +
+	scale_x_continuous(breaks = num_trees)
+```
+
+We then create a random forest classifier using 5 features and 750 trees
+
+```{r Model Random Forest}
+model_ranForst <- randomForest(
+	stroke ~ .,
+	data = data_train,
+	ntree = 750,
+	mtry = 5,
+	importance = TRUE
+)
+```
+
+```{r out.width = '90%', fig.align = 'center'}
+varImpPlot(
+	model_ranForst,
+	type = 1,
+	class = 1,
+	main = "Importance plot for random forest"
+)
+```
+
+
+# Testing the models.
+
+We have trained several models, from very simple (Naïve Bayes and Logistic Regression) to more complex (Random Forest Classifier). We now compare them using the test data and creating a __ROC__ curve and report its __AUC__.
+
+
+
+```{r Prediction of probabilites, message = FALSE}
+pred_prob_naive <- predict(
+	model_naive,
+	newdata = data_test,
+	type = "raw"
+)[, 2] #Only want the probabilites of stroke
+
+pred_prob_lda <- predict(
+	model_lda,
+	newdata = data_test
+)$posterior[, 2]
+
+pred_prob_qda <- predict(
+	model_qda,
+	newdata = data_test
+)$posterior[, 2]
+
+pred_prob_BIC <- predict(
+	model_logis_BIC_best,
+	newdata = data_test,
+	type = "response"
+)
+
+pred_prob_AIC <- predict(
+	model_logis_AIC_best,
+	newdata = data_test,
+	type = "response"
+)
+
+pred_prob_logis_full <- predict(
+	model_logis_full,
+	newdata = data_test,
+	type = "response"
+)
+
+pred_prob_boost <- predict(
+	model_boost,
+	newdata = data_test_aux,
+	type = "response"
+)
+
+pred_prob_knn <- predict(
+	model_knn,
+	newdata = data_test_knn,
+	type = "prob"
+)[, 2]
+
+
+pred_prob_ranForst <- predict(
+	model_ranForst,
+	newdata = data_test,
+	type = "prob"
+)[, 2]
+```
+
+```{r Creation of TPR-FPR objects}
+roc_curve <- function(pred, truth) {
+	temp_pred <- prediction(pred, truth)
+
+	temp_perf <- performance(temp_pred, measure = "tpr", x.measure = "fpr")
+	temp_auc  <- performance(temp_pred, measure = "auc")@y.values[[1]]
+	return(list(temp_perf, temp_auc))
+}
+
+roc_naive <- roc_curve(
+	pred_prob_naive,
+	data_test$stroke
+)
+
+roc_lda <- roc_curve(
+	pred_prob_lda,
+	data_test$stroke
+)
+
+roc_qda <- roc_curve(
+	pred_prob_qda,
+	data_test$stroke
+)
+
+roc_BIC <- roc_curve(
+	pred_prob_BIC,
+	data_test$stroke
+)
+
+roc_AIC <- roc_curve(
+	pred_prob_AIC,
+	data_test$stroke
+)
+
+roc_logis_full <- roc_curve(
+	pred_prob_logis_full,
+	data_test$stroke
+)
+
+roc_boost <- roc_curve(
+	pred_prob_boost,
+	data_test$stroke
+)
+
+roc_knn <- roc_curve(
+	pred_prob_knn,
+	data_test$stroke
+)
+
+roc_ranForst <- roc_curve(
+	pred_prob_ranForst,
+	data_test$stroke
+)
+```
+
+# ROC Logistic
+
+```{r AUROC function}
+plot_auroc <- function(object, main = "") {
+	plot(object[[1]], main = main, colorize = TRUE)
+	legend("center",
+	   legend = paste("AUC:", round(object[[2]], 3)),
+	   box.lty = 0
+	)
+}
+```
+
+
+```{r out.width = '90%', fig.align = 'center'}
+par(mfrow = c(1, 3))
+plot_auroc(roc_BIC, main = "BIC")
+plot_auroc(roc_AIC, main = "AIC")
+plot_auroc(roc_logis_full, main = "Full")
+```
+
+# ROC Naïve Bayes, Linear and Quadratic Discriminant Analyses
+
+```{r out.width = '90%', fig.align = 'center'}
+par(mfrow = c(1, 3))
+plot_auroc(roc_naive, main = "Naïve Bayes")
+plot_auroc(roc_lda, main = "LDA")
+plot_auroc(roc_qda, main = "QDA")
+```
+
+# ROC Boosting and Random Forest
+```{r out.width = '90%', fig.align = 'center'}
+par(mfrow = c(1, 2))
+plot_auroc(roc_boost, main = "Boosting")
+plot_auroc(roc_ranForst, main = "Random Forest")
+```
+
+# ROC K-Nearest Neighbours: 1 neighbour
+
+```{r out.width = '90%', fig.align = 'center'}
+plot_auroc(roc_knn, main = "KNN(K = 1)")
+```
+
+
+# Conclusions
+
+Any of the basic classifiers: Logistic Regression, Naïve Bayes, Linear and Quadratic Discriminant Analyses seem to perform about the same. Any of these models can then be passed to a professional of the field who may choose, based on what they may consider a good trade-off between the FPR and TPR.
+
+Another option would to create an __ensemble classifier.__ Having set a trade-off between FPR and TPR, we can set the cut-off probabilities for the best models here and obtain their responses and finally take a majority vote for prediction.
+
+Another possibility is to include interaction terms between age and the variables found. For example, Logistic Regression as selected by BIC has the features age and average level of glucose in the blood. These two features are also related and an interaction term may then be sound.
+
+# After thougths
+
+Let us do the Logistic Regression with an interaction between age and glucose level.
+
+```{r out.width = '90%', fig.align = 'center'}
+model_logis_inter <- glm(
+	stroke ~ age + avg_glucose_level + age : avg_glucose_level,
+	data = data_train,
+	family = binomial
+)
+pred_prob_logis_inter <- predict(
+	model_logis_inter,
+	newdata = data_test,
+	type = "response"
+)
+roc_logis_inter <- roc_curve(
+	pred_prob_logis_full,
+	data_test$stroke
+)
+plot_auroc(roc_logis_inter, main = "Interactions")
+```
+
+We see that interaction terms do not improve over the model selected by Schwarz' bayesian information criterion.
