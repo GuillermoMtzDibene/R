@@ -1,5 +1,7 @@
 ---
 title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 7"
+author: "Guillermo Martinez Dibene"
+date: "5th of May, 2021"
 output: html_document
 ---
 
@@ -147,7 +149,7 @@ plot_cuts
 
 The previous plot suggests that 8 cuts is optimal. We can compare now both plots head to head. We need to code a function just for that puporse.
 
-```{r}
+```{r Multiplot Function}
 multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL, title = "") {
 	library(grid)
 	

@@ -1,5 +1,7 @@
 ---
 title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 6"
+author: "Guillermo Martinez Dibene"
+date: "30th of April, 2021"
 output: html_document
 ---
 

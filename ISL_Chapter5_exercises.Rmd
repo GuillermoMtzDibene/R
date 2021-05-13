@@ -1,8 +1,8 @@
 ---
 title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 5"
-output:
-  html_document:
-    df_print: paged
+author: "Guillermo Martinez Dibene"
+date: "25th of April, 2021"
+output: html_document
 ---
 
 This chapter is all about validation, including cross-validation and bootstrap.
@@ -189,6 +189,7 @@ Boston %>% ggplot(aes(medv)) +
 	geom_ref_line(v = mean_boston, size = 1, colour = "green4") +
 	labs(x = "Median value of home in $1000s of USD", y = "Number of houses")
 ```
+
 We are interested in finding a $95\%$ confidence interval for the sample median and sample mean, hereinafter denoted $\widehat{\mathrm{med}}$ and $\hat \mu$. The random variable $\hat \mu$ has variance $\mathbf{V}\mathrm{ar}(\hat \mu) = \dfrac{\sigma^2}{n}$, where $\sigma^2$ is the population variance of median house value; the variance of $\widehat{\mathrm{med}}$ has no closed form. First, for the mean,
 ```{r}
 sd_mean_boston <- sd(Boston$medv) / sqrt(nrow(Boston))

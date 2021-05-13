@@ -1,5 +1,7 @@
 ---
 title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 8"
+author: "Guillermo Martinez Dibene"
+date: "7th of May, 2021"
 output:
   html_document:
     df_print: paged
