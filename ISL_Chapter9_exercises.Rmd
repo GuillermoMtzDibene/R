@@ -1,0 +1,209 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 9"
+author: "Guillermo Martinez Dibene"
+date: "13th of May, 2021"
+output: html_document
+---
+
+This chapter is all about Support Vector Machines and related models. We will work mostly with the `e1071` library.
+
+# Exercise 7
+
+This exercise deal with the `Auto` data set and we will try to predict whether a given cars gets high or low gas mileage based on the other features.
+
+```{r, include = FALSE}
+library(tidyverse)
+library(e1071)
+library(ISLR)
+```
+
+```{r}
+Auto <- Auto %>%
+	mutate(
+		high = if_else(mpg > median(mpg), 1, 0),
+		high = as_factor(high)
+	) %>%
+	select(
+		-mpg, -name
+	) #Neither name nor mpg will be used
+head(Auto)
+```
+
+We now fit a SVM with a linear kernel and selecting an optimal cost using cross-validation. We use the `tune` function inside the `e1071` library.
+
+```{r}
+svm_tunning <- tune(
+	svm,
+	high ~ .,
+	data = Auto,
+	ranges = list(
+		cost = 10*1:10
+	)
+)
+
+summary(svm_tunning)
+```
+
+Here we did the tuning twice. First using a range of values for the cost increasing in multiples of 10 from 0.001 to 100. Between 10 and 100 was the best error. We then tune again using the current costs and we see that a cost of 20 gives the best error. This "double tuning method" is admittedly unfeasible for large data sets since the SVM are quite slow to train.
+
+```{r}
+svm_model <- svm_tunning$best.model
+table(predict = predict(svm_model, newdata = Auto), truth = Auto$high)
+```
+
+The exercise asks to plot the SVM decision boundaries using pair of variables. None of the plots is good (this is a projection from 8 to 2 dimensions).
+
+```{r}
+svm_tunning_poly <- tune(
+	svm,
+	high ~ .,
+	data = Auto,
+	kernel = "polynomial",
+	ranges = list(
+		cost = c(0.01, 0.1, 1, 10),
+		gamma = c(0.01, 0.1, 1, 10),
+		degree = 2:5
+	)
+)
+svm_poly <- svm_tunning_poly$best.model
+table(predict = predict(svm_poly, newdata = Auto), truth = Auto$high)
+```
+Worse than linear.
+
+```{r}
+svm_tunning_radial <- tune(
+	svm,
+	high ~ .,
+	data = Auto,
+	kernel = "radial",
+	ranges = list(
+		cost = c(0.01, 0.1, 1, 10),
+		gamma = c(0.01, 0.1, 1, 10)
+	)
+)
+svm_radial <- svm_tunning_radial$best.model
+table(predict = predict(svm_poly, newdata = Auto), truth = Auto$high)
+```
+
+We see no improvement over the SVM with a polynomial kernel.
+
+
+
+
+
+# Exercise 8
+
+This exercise works with the `OJ` data set with contains information of costumers of two different brands of orange juice. We try to predict `Purchase` which is a  categorical variable with two levels `CH` and `MM` indicating the two brands of orange juice under consideration.
+
+```{r}
+set.seed(4)
+train <- sample(1:nrow(OJ), size = 800)
+OJ_train <- OJ[train, ]
+OJ_test <- OJ[-train, ]
+```
+
+We first fit a SVC with cost set to 0.01.
+
+```{r}
+oj_linear <- svm(
+	Purchase ~ .,
+	data = OJ,
+	cost = 0.01,
+	kernel = "linear"
+)
+
+summary(oj_linear)
+```
+
+```{r}
+table(predict = predict(oj_linear, newdata = OJ_test), truth = OJ_test$Purchase)
+```
+
+This has an error of $\dfrac{36}{270} = 13.3\%.$
+
+We now find an optimal linear SVC.
+
+```{r}
+tuning_linear  <- tune(
+	svm,
+	Purchase ~ .,
+	data = OJ_train,
+	ranges = list(
+		cost = seq(from = 0.1, to = 10, length.out = 20)
+	),
+	tunecontrol = tune.control(cross = 4)
+)
+
+tuning_linear
+```
+
+We now save the best model found.
+
+```{r}
+oj_linear_opt <- tuning_linear$best.model
+table(predict = predict(oj_linear_opt, newdata = OJ_test), truth = OJ_test$Purchase)
+```
+
+The error rate is already higher, at $17\%.$ We now print all the estimated errors.
+
+```{r}
+summary(tuning_linear)
+```
+We see that all the different costs produced similar error terms.
+
+We now fit a radial SVC.
+
+```{r}
+oj_radial <- svm(Purchase ~ ., data = OJ_train, kernel = "radial")
+table(predict = predict(oj_radial, newdata = OJ_test), truth = OJ_test$Purchase)
+```
+
+The radial SVC with default parameter values perform exactly the same as the best linear. We now choose parameters using 10-CV.
+
+```{r}
+tuning_radial <- tune(
+	svm,
+	Purchase ~ .,
+	data = OJ_train,
+	kernel = "radial",
+	ranges = list(
+		gamma = c(0.001, 0.01, 0.1, 1, 10, 100)
+	),
+	tunecontrol = tune.control(cross = 4)
+)
+
+tuning_radial
+```
+We save the best model and compare.
+```{r}
+oj_radial_opt <- tuning_radial$best.model
+table(predict = predict(oj_radial_opt, newdata = OJ_test), truth = OJ_test$Purchase)
+```
+The error rate improved from the optimal linear of around 17% to $15.2\5%$. Still larger than the default linear.
+
+Finally, we repeat with a polynomial kernel with degree 2.
+
+```{r}
+tuning_poly <- tune(
+	svm,
+	Purchase ~ .,
+	data = OJ_train,
+	kernel = "polynomia",
+	degree = 2,
+	ranges = list(
+		gamma = c(0.001, 0.01, 0.1, 1, 10, 100)
+	),
+	tunecontrol = tune.control(cross = 4)
+)
+
+tuning_poly
+```
+
+```{r}
+oj_poly_opt <- svm(Purchase ~ ., data = OJ_train, kernel = "radial")
+table(predict = predict(oj_poly_opt, newdata = OJ_test), truth = OJ_test$Purchase)
+```
+
+And again, the error goes to $17.8\%$.
+
+Somewhat surprisingly, the best approach was to use a linear kernel with a cost of 0.01 (not the one found using cross-validation)
