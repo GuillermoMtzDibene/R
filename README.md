@@ -16,3 +16,5 @@ I will upload some data visualisation or analyses I have done with R, as well as
 <a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter8_exercises.html">ISL, Chapter 8</a> In this notebook I worked through exercises 6, 7, 8, 9, 10 and 11 of chapter 8. This chapter was all about decision trees, random forests and boosting. Some models here improve error rates from previous chapter from 66% to 9% error.
 
 <a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter9_exercises.html">ISL, Chapter 9</a> In this notebook I worked through exercises 7 and 8 (the only ones that dealt with real data). This was simple svm and tuning of parameters from the e1071 library.
+
+<a href = "https://guillermomtzdibene.github.io/R/ISL_Chapter10_exercises.html">ISL, Chapter 10</a> In this notebook I worked through exercises 9 and 11 (the only ones that dealt with real data). This was simple clustering using K-means and PCA.

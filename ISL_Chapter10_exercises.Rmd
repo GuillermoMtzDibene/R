@@ -1,0 +1,102 @@
+---
+title: "Solutions to Exercises of Introduction to Statistical Learning, Chapter 9"
+author: "Guillermo Martinez Dibene"
+date: "16th of May, 2021"
+output: html_document
+---
+
+This chapter was all about clustering and they focus on three types of clusters: principal component analysis, K-means clustering and hierarchichal clustering.
+
+```{r Loading libraries, include = FALSE}
+library(ISLR)
+library(tidyverse)
+```
+
+
+# Exercise 9
+
+Here we wil analyse the `USArrests` data set in which the number of `Murders`, `Assaults` and `Rape` per 100,000 people are given for the year of 1973. The percent of urban population rounded to the nearest integer is also given in the `UrbanPop` column.
+
+```{r}
+arrests <- rownames_to_column(USArrests, var = "State") %>% as_tibble()
+```
+
+### Hierarchical clustering without scaling
+
+First we will do a hierarchical clustering of the data using complete linkage and Euclidean distance _without scaling_.
+
+```{r out.width = '90%'}
+hier_clust <- hclust(dist(select(arrests, -State)))
+plot(hier_clust, labels = arrests$State, cex = 0.75, xlab = "", sub = "")
+abline(h = 120, lty = "dashed")
+```
+
+We created three clusters. We now print them.
+
+```{r}
+arrests <- arrests %>% mutate(
+	cluster = cutree(hier_clust, 3)
+)
+
+```
+
+The first cluster is:
+```{r}
+arrests %>%
+	filter(cluster == 1) %>%
+	select(State)
+```
+
+The second cluster is:
+```{r}
+arrests %>%
+	filter(cluster == 2) %>%
+	select(State)
+```
+
+
+The third cluster:
+```{r}
+arrests %>%
+	filter(cluster == 3) %>%
+	select(State)
+```
+
+I am no expert in the location of the USA states, but it seems fairly obvious that geographical location played a big role in the clustering, despite said feature is not part of the feature matrix.
+
+### Hierarchical clustering with scaling
+
+We redo the previous code but scaling the variables in advance.
+
+```{r}
+arrests_std <- arrests %>%
+	select(
+		State:Rape #We do not need the cluster column
+	) %>%
+	mutate(
+		across(
+			.cols = -State, #Scale everything except State
+			.fns = scale
+		)
+	)
+
+hier_clust_std <- hclust(dist(select(arrests_std, -State)))
+```
+
+```{r out.width = '90%'}
+plot(hier_clust_std, labels = arrests$State, cex = 0.75, xlab = "", sub = "")
+```
+
+Now the states seem more mixed geographically. It makes sense that different areas of the US should share different levels of crime. For instance, before scaling, there was clearly a southern-states cluster and a northern-states one. This could be due to cultural differences. Overall, it seems that not scaling the variables for hierarchical cluster produces results that are more culturally sensitive.
+
+# Exercise 11
+
+Here we will work with a special data set that consists of 40 tissue samples with measurements of 1,000 genes. The first 20 samples are from healthy patients and the other 20 are from a diseased group.
+
+```{r}
+genes <- read_csv(r"(Ch10Ex11.csv)", col_names = paste(rep("Patient", 40), 1:40))
+hier_genes <- hclust(as.dist(1 - cor(genes)), method = "complete")
+plot(hier_genes, xlab = "", sub = "Healthy: 1-20. Diseased: 21-40", ylab = "", cex = 0.75)
+```
+
+We see that the diseased and the healthy patients have very different genes.
